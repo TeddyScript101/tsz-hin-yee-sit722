@@ -15,9 +15,9 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: test_db
+          POSTGRES_DB: orders
         options: >-
-          --health-cmd="pg_isready -U postgres -d test_db"
+          --health-cmd="pg_isready -U postgres -d orders"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
@@ -27,7 +27,7 @@ jobs:
         service: [customer_service, order_service, product_service]
 
     env:
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/orders
 
     steps:
       - name: Checkout code
