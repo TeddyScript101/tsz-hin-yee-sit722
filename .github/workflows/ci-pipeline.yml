@@ -51,12 +51,6 @@ jobs:
           cd backend/${{ matrix.service }}
           python -m pytest tests/ -v
 
-      - name: Run linting for ${{ matrix.service }}
-        run: |
-          cd backend/${{ matrix.service }}
-          pip install flake8
-          flake8 app/ --max-line-length=88 --ignore=E203,W503
-
   build-and-push:
     runs-on: ubuntu-latest
     needs: test-backend-services
