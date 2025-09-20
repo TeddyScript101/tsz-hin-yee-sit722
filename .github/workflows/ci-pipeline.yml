@@ -7,11 +7,6 @@ on:
 jobs:
   test-backend-services:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        service: [customer_service, order_service, product_service]
-        db: [customers, orders, products] # map each service to its database
-
     services:
       postgres:
         image: postgres:14
@@ -20,15 +15,22 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: ${{ matrix.db }}
+          POSTGRES_DB: postgres # default DB to connect to initially
         options: >-
-          --health-cmd="pg_isready -U postgres -d ${{ matrix.db }}"
+          --health-cmd="pg_isready -U postgres -d postgres"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
 
+    strategy:
+      matrix:
+        service: [customer_service, order_service, product_service]
+
     env:
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/${{ matrix.db }}
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
 
     steps:
       - name: Checkout code
@@ -39,12 +41,36 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Wait for PostgreSQL to be ready
+        run: |
+          until pg_isready -h $POSTGRES_HOST -p $POSTGRES_PORT -U $POSTGRES_USER; do
+            echo "Waiting for PostgreSQL..."
+            sleep 2
+          done
+
+      - name: Create databases if they don't exist
+        run: |
+          psql postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:$POSTGRES_PORT/postgres -tc "SELECT 1 FROM pg_database WHERE datname = 'customers'" | grep -q 1 || psql postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:$POSTGRES_PORT/postgres -c "CREATE DATABASE customers;"
+          psql postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:$POSTGRES_PORT/postgres -tc "SELECT 1 FROM pg_database WHERE datname = 'orders'" | grep -q 1 || psql postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:$POSTGRES_PORT/postgres -c "CREATE DATABASE orders;"
+          psql postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:$POSTGRES_PORT/postgres -tc "SELECT 1 FROM pg_database WHERE datname = 'products'" | grep -q 1 || psql postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:$POSTGRES_PORT/postgres -c "CREATE DATABASE products;"
+
       - name: Install dependencies for ${{ matrix.service }}
         run: |
           cd backend/${{ matrix.service }}
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
+
+      - name: Set DATABASE_URL for service
+        run: |
+          if [ "${{ matrix.service }}" = "customer_service" ]; then
+            export DATABASE_URL=postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:$POSTGRES_PORT/customers
+          elif [ "${{ matrix.service }}" = "order_service" ]; then
+            export DATABASE_URL=postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:$POSTGRES_PORT/orders
+          elif [ "${{ matrix.service }}" = "product_service" ]; then
+            export DATABASE_URL=postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:$POSTGRES_PORT/products
+          fi
+          echo "DATABASE_URL=$DATABASE_URL" >> $GITHUB_ENV
 
       - name: Run tests for ${{ matrix.service }}
         run: |
@@ -57,7 +83,7 @@ jobs:
     steps:
       - name: Simulate Build and Push
         run: |
-          echo "All tests and linting passed successfully."
+          echo "All tests passed successfully."
           echo "Simulating build and push process..."
           echo "Building Docker images..."
           echo "Pushing images to container registry..."
