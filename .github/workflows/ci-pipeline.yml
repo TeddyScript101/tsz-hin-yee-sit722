@@ -13,11 +13,11 @@ jobs:
         ports:
           - 5432:5432
         env:
-          POSTGRES_USER: test_user
-          POSTGRES_PASSWORD: test_pass
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
           POSTGRES_DB: test_db
         options: >-
-          --health-cmd="pg_isready -U test_user -d test_db"
+          --health-cmd="pg_isready -U postgres -d test_db"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
@@ -27,7 +27,7 @@ jobs:
         service: [customer_service, order_service, product_service]
 
     env:
-      DATABASE_URL: postgresql://test_user:test_pass@localhost:5432/test_db
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
 
     steps:
       - name: Checkout code
