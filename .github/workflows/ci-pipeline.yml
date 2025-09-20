@@ -1,0 +1,39 @@
+name: CI Pipeline - Testing Branch
+
+on:
+  push:
+    branches: [testing]
+
+jobs:
+  test-backend-services:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [customer_service, order_service, product_service]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies for ${{ matrix.service }}
+        run: |
+          cd backend/${{ matrix.service }}
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run tests for ${{ matrix.service }}
+        run: |
+          cd backend/${{ matrix.service }}
+          python -m pytest tests/ -v
+
+      - name: Run linting for ${{ matrix.service }}
+        run: |
+          cd backend/${{ matrix.service }}
+          pip install flake8
+          flake8 app/ --max-line-length=88 --ignore=E203,W503
