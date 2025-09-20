@@ -7,9 +7,27 @@ on:
 jobs:
   test-backend-services:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:14
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_pass
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd="pg_isready -U test_user -d test_db"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
     strategy:
       matrix:
         service: [customer_service, order_service, product_service]
+
+    env:
+      DATABASE_URL: postgresql://test_user:test_pass@localhost:5432/test_db
 
     steps:
       - name: Checkout code
@@ -48,4 +66,4 @@ jobs:
           echo "Simulating build and push process..."
           echo "Building Docker images..."
           echo "Pushing images to container registry..."
-          echo " Build and push simulation complete!"
+          echo "Build and push simulation complete!"
