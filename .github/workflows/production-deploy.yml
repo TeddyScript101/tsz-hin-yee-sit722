@@ -13,14 +13,14 @@ jobs:
       RESOURCE_GROUP: teddysit722Week10
       AKS_NAME: aksteddy722Week10
       ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
-      IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
+      IMAGE_TAG: ${{ github.sha }}
       PROD_NAMESPACE: production
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.sha }}
 
       - name: Azure Login
         uses: azure/login@v1
@@ -41,7 +41,7 @@ jobs:
           for service in customer_service order_service product_service; do
             K8S_NAME=$(echo $service | sed 's/_/-/g')
             echo "📦 Deploying $service as $K8S_NAME to production"
-            
+
             if [ -d "k8s/$service" ]; then
               kubectl apply -f k8s/$service/ -n $PROD_NAMESPACE
             else
@@ -55,7 +55,10 @@ jobs:
             fi
 
             kubectl label deployment $K8S_NAME app=$K8S_NAME -n $PROD_NAMESPACE --overwrite
-            kubectl set image deployment/$K8S_NAME *=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG -n $PROD_NAMESPACE
+
+            # Use explicit container name for safety
+            kubectl set image deployment/$K8S_NAME $K8S_NAME=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG -n $PROD_NAMESPACE --record
+
             echo "✅ $service deployed and labeled"
           done
 
@@ -68,27 +71,28 @@ jobs:
             kubectl create deployment frontend --image=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG -n $PROD_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
             kubectl expose deployment frontend --port=80 --target-port=80 --name=frontend-service -n $PROD_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
           fi
-          kubectl set image deployment/frontend *=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG -n $PROD_NAMESPACE
           kubectl label deployment frontend app=frontend -n $PROD_NAMESPACE --overwrite
+          kubectl set image deployment/frontend frontend=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG -n $PROD_NAMESPACE --record
           echo "✅ Frontend deployed and labeled"
 
       - name: Wait for Deployments
         run: |
           DEPLOYMENTS=$(kubectl get deployments -n $PROD_NAMESPACE -o jsonpath='{.items[*].metadata.name}')
           for dep in $DEPLOYMENTS; do
+            echo "⏳ Waiting for $dep to be ready..."
             kubectl rollout status deployment/$dep -n $PROD_NAMESPACE --timeout=300s
             echo "✅ $dep ready"
           done
 
-      - name: Run Production Tests
+      - name: Run Production Health Checks
         run: |
-          echo "🧪 Running production tests..."
-          kubectl port-forward service/frontend-service 8080:80 -n $PROD_NAMESPACE &
-          PF_PID=$!
-          sleep 10
-          curl -f -s http://localhost:8080 && echo "✅ Frontend responding" || echo "⚠️ Frontend not responding"
-          kill $PF_PID 2>/dev/null || true
+          echo "🧪 Running production health checks..."
 
+          # Check frontend deployment availability
+          kubectl wait --for=condition=available deployment/frontend -n $PROD_NAMESPACE --timeout=120s && \
+          echo "✅ Frontend deployment available" || echo "⚠️ Frontend not ready"
+
+          # Check backend pods readiness
           for svc in customer-service order-service product-service; do
             POD=$(kubectl get pods -n $PROD_NAMESPACE -l app=$svc -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
             if [ -n "$POD" ]; then
