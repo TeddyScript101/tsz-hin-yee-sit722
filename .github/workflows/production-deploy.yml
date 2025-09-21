@@ -1,9 +1,9 @@
-name: Stage 3 - production Deployment
+name: Stage 3 - Production Deployment
 
 on:
   push:
     branches:
-      - main # ✅ Trigger only when PR is merged into main
+      - main
 
 jobs:
   production-deployment:
@@ -13,13 +13,11 @@ jobs:
       RESOURCE_GROUP: teddysit722Week10
       AKS_NAME: aksteddy722Week10
       ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
-      IMAGE_TAG: ${{ github.sha }}
+      IMAGE_TAG: "latest" # Use latest tag instead of commit SHA
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
 
       - name: Azure Login
         uses: azure/login@v1
@@ -33,9 +31,7 @@ jobs:
 
       - name: Create production Namespace
         run: |
-          PRODUCTION_NAMESPACE="production-${{ github.run_id }}"
-          kubectl create namespace $PRODUCTION_NAMESPACE || echo "Namespace exists"
-          echo "PRODUCTION_NAMESPACE=$PRODUCTION_NAMESPACE" >> $GITHUB_ENV
+          kubectl create namespace production || echo "Namespace exists"
 
       - name: Deploy Backend Services
         run: |
@@ -43,24 +39,16 @@ jobs:
             K8S_NAME=$(echo $service | sed 's/_/-/g')
             echo "📦 Deploying $service as $K8S_NAME"
             
-            # Apply manifests if exist, otherwise create deployment
-            if [ -d "k8s/$service" ]; then
-              kubectl apply -f k8s/$service/ -n $PRODUCTION_NAMESPACE
-            else
-              kubectl create deployment $K8S_NAME \
-                --image=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG \
-                -n $PRODUCTION_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
-              kubectl expose deployment $K8S_NAME \
-                --port=80 --target-port=80 \
-                --name=${K8S_NAME}-service \
-                -n $PRODUCTION_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
-            fi
+            kubectl create deployment $K8S_NAME \
+              --image=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG \
+              -n production --dry-run=client -o yaml | kubectl apply -f -
+            kubectl expose deployment $K8S_NAME \
+              --port=80 --target-port=80 \
+              --name=${K8S_NAME}-service \
+              -n production --dry-run=client -o yaml | kubectl apply -f -
 
-            # Ensure proper label for health checks
-            kubectl label deployment $K8S_NAME app=$K8S_NAME -n $PRODUCTION_NAMESPACE --overwrite
-
-            # Update image safely
-            kubectl set image deployment/$K8S_NAME *=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG -n $PRODUCTION_NAMESPACE || echo "Deployment $K8S_NAME not found"
+            kubectl label deployment $K8S_NAME app=$K8S_NAME -n production --overwrite
+            kubectl set image deployment/$K8S_NAME *=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG -n production
 
             echo "✅ $service deployed and labeled"
           done
@@ -68,47 +56,43 @@ jobs:
       - name: Deploy Frontend
         run: |
           echo "📦 Deploying frontend"
-          if [ -d "k8s/frontend" ]; then
-            kubectl apply -f k8s/frontend/ -n $PRODUCTION_NAMESPACE
-          else
-            kubectl create deployment frontend --image=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG -n $PRODUCTION_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
-            kubectl expose deployment frontend --port=80 --target-port=80 --name=frontend-service -n $PRODUCTION_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
-          fi
-          kubectl set image deployment/frontend *=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG -n $PRODUCTION_NAMESPACE
-          kubectl label deployment frontend app=frontend -n $PRODUCTION_NAMESPACE --overwrite
+          kubectl create deployment frontend --image=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG -n production --dry-run=client -o yaml | kubectl apply -f -
+          kubectl expose deployment frontend --port=80 --target-port=80 --name=frontend-service -n production --dry-run=client -o yaml | kubectl apply -f -
+          kubectl set image deployment/frontend *=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG -n production
+          kubectl label deployment frontend app=frontend -n production --overwrite
           echo "✅ Frontend deployed and labeled"
 
       - name: Wait for Deployments
         run: |
-          DEPLOYMENTS=$(kubectl get deployments -n $PRODUCTION_NAMESPACE -o jsonpath='{.items[*].metadata.name}')
+          DEPLOYMENTS=$(kubectl get deployments -n production -o jsonpath='{.items[*].metadata.name}')
           for dep in $DEPLOYMENTS; do
-            kubectl rollout status deployment/$dep -n $PRODUCTION_NAMESPACE --timeout=300s
+            kubectl rollout status deployment/$dep -n production --timeout=300s
             echo "✅ $dep ready"
           done
 
       - name: Run production Tests
         run: |
           echo "🧪 Running tests..."
-          # Frontend
-          kubectl port-forward service/frontend-service 8080:80 -n $PRODUCTION_NAMESPACE &
+          kubectl port-forward service/frontend-service 8080:80 -n production &
           PF_PID=$!
           sleep 10
           curl -f -s http://localhost:8080 && echo "✅ Frontend responding" || echo "⚠️ Frontend not responding"
           kill $PF_PID 2>/dev/null || true
 
-          # Backend
           for svc in customer-service order-service product-service; do
-            POD=$(kubectl get pods -n $PRODUCTION_NAMESPACE -l app=$svc -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+            POD=$(kubectl get pods -n production -l app=$svc -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
             if [ -n "$POD" ]; then
-              kubectl wait --for=condition=ready pod/$POD -n $PRODUCTION_NAMESPACE --timeout=120s
+              kubectl wait --for=condition=ready pod/$POD -n production --timeout=120s
               echo "✅ $svc pod ready"
             else
               echo "⚠️ $svc pod not found"
             fi
           done
 
-      - name: Cleanup production Environment
-        if: always()
+      - name: Display Production Status
         run: |
-          kubectl delete namespace $PRODUCTION_NAMESPACE --ignore-not-found=true --timeout=60s
-          echo "✅ production cleaned up"
+          echo "📋 Production deployment summary:"
+          kubectl get services -n production
+          kubectl get deployments -n production
+          kubectl get pods -n production
+          echo "✅ Production deployment completed!"
