@@ -12,7 +12,7 @@ jobs:
     env:
       RESOURCE_GROUP: teddysit722Week10
       AKS_NAME: aksteddy722Week10
-      ACR_NAME: teddysit722week10
+      ACR_NAME: teddyacr722week10
       ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
       IMAGE_TAG: latest # Use a stable tag for production
       PROD_NAMESPACE: production
