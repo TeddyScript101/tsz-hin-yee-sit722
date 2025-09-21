@@ -29,11 +29,16 @@ jobs:
           az aks get-credentials --resource-group $RESOURCE_GROUP --name $AKS_NAME
           kubectl cluster-info
 
+      - name: Ensure Production Namespace Exists
+        run: |
+          kubectl get namespace production || kubectl create namespace production
+          echo "✅ Production namespace ready"
+
       - name: Deploy Backend Services
         run: |
           for service in customer_service order_service product_service; do
             K8S_NAME=$(echo $service | sed 's/_/-/g')
-            echo "Deploying $service as $K8S_NAME"
+            echo "📦 Deploying $service as $K8S_NAME"
 
             if [ -d "k8s/$service" ]; then
               kubectl apply -f k8s/$service/ -n production
@@ -47,31 +52,35 @@ jobs:
                 -n production --dry-run=client -o yaml | kubectl apply -f -
             fi
 
+            # Ensure deployment has correct app label
             kubectl label deployment $K8S_NAME app=$K8S_NAME -n production --overwrite
+
+            # Update image if deployment exists
             kubectl set image deployment/$K8S_NAME $K8S_NAME=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG -n production || echo "$K8S_NAME not found"
+
+            echo "✅ $service deployment completed"
           done
 
       - name: Deploy Frontend
         run: |
+          echo "📦 Deploying frontend"
           if [ -d "k8s/frontend" ]; then
             kubectl apply -f k8s/frontend/ -n production
           else
-            kubectl create deployment frontend \
-              --image=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG \
-              -n production --dry-run=client -o yaml | kubectl apply -f -
-            kubectl expose deployment frontend \
-              --port=80 --target-port=80 \
-              --name=frontend-service -n production --dry-run=client -o yaml | kubectl apply -f -
+            kubectl create deployment frontend --image=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG -n production --dry-run=client -o yaml | kubectl apply -f -
+            kubectl expose deployment frontend --port=80 --target-port=80 --name=frontend-service -n production --dry-run=client -o yaml | kubectl apply -f -
           fi
           kubectl set image deployment/frontend frontend=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG -n production || echo "frontend not found"
           kubectl label deployment frontend app=frontend -n production --overwrite
+          echo "✅ Frontend deployment completed"
 
       - name: Wait for All Deployments
         run: |
           DEPLOYMENTS=$(kubectl get deployments -n production -o jsonpath='{.items[*].metadata.name}')
           for dep in $DEPLOYMENTS; do
-            echo "Waiting for $dep..."
+            echo "Waiting for $dep"
             kubectl rollout status deployment/$dep -n production --timeout=300s
+            echo "✅ $dep ready"
           done
 
       - name: Display Production Environment Status
@@ -83,9 +92,9 @@ jobs:
           echo "Pods:"
           kubectl get pods -n production -o wide
 
-      - name: Run Production Environment Tests
+      - name: Run Production Health Checks
         run: |
-          echo "🧪 Running production tests..."
+          echo "🧪 Running production health checks..."
 
           # Frontend test via port-forward
           FRONTEND_SERVICE="frontend-service"
@@ -99,7 +108,7 @@ jobs:
           fi
           kill $PF_PID 2>/dev/null || true
 
-          # Backend tests: check pods are ready
+          # Backend pods ready check
           BACKENDS=("customer-service" "order-service" "product-service")
           for svc in "${BACKENDS[@]}"; do
             K8S_NAME=$(echo $svc | sed 's/_/-/g')
@@ -112,18 +121,8 @@ jobs:
             fi
           done
 
-      - name: Acceptance Testing
-        run: |
-          echo "✅ Acceptance tests completed"
-          echo "Namespace: production"
-          echo "Services tested: customer_service, order_service, product_service, frontend"
-
-      - name: Production Summary Report
+      - name: Production Deployment Summary
         run: |
           echo "Namespace: production"
           echo "Images deployed: customer-service:$IMAGE_TAG, order-service:$IMAGE_TAG, product-service:$IMAGE_TAG, frontend:$IMAGE_TAG"
-
-      - name: Final Status Report
-        run: |
-          echo "🎉 PRODUCTION DEPLOYMENT COMPLETED SUCCESSFULLY! 🎉"
-          echo "All services deployed and tested in production namespace"
+          echo "✅ Production deployment and testing completed"
