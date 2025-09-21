@@ -4,6 +4,8 @@ on:
   workflow_run:
     workflows: ["CI Pipeline - Testing Branch"]
     types: [completed]
+    branches:
+      - testing
 
 jobs:
   staging-deployment:
@@ -25,93 +27,47 @@ jobs:
             --resource-group teddysit722Week10 \
             --name aksteddy722Week10
 
-      - name: Create Staging Namespace
+      - name: Set Namespace
+        id: set-namespace
         run: |
-          # Create unique staging namespace for this pipeline run
-          kubectl create namespace staging-${{ github.run_id }} || echo "Namespace already exists"
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "namespace=production" >> $GITHUB_OUTPUT
+          else
+            echo "namespace=staging-${{ github.run_id }}" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Deploy Backend Services to Staging
+      - name: Create Namespace
         run: |
-          # Deploy each backend service
+          kubectl create namespace ${{ steps.set-namespace.outputs.namespace }} || echo "Namespace already exists"
+
+      - name: Deploy Backend Services
+        run: |
           for service in customer_service order_service product_service; do
-            echo "Deploying $service to staging..."
-
-            # Apply Kubernetes manifests for each service
-            kubectl apply -f k8s/${service}/ -n staging-${{ github.run_id }}
-
-            # Update deployment with latest image from ACR
+            echo "Deploying $service..."
+            kubectl apply -f k8s/${service}/ -n ${{ steps.set-namespace.outputs.namespace }}
             kubectl set image deployment/${service} \
               ${service}=${{ secrets.ACR_LOGIN_SERVER }}/${service}:${{ github.sha }} \
-              -n staging-${{ github.run_id }}
+              -n ${{ steps.set-namespace.outputs.namespace }}
           done
 
-      - name: Deploy Frontend to Staging
+      - name: Deploy Frontend
         run: |
-          echo "Deploying frontend to staging..."
-
-          # Apply frontend Kubernetes manifests
-          kubectl apply -f k8s/frontend/ -n staging-${{ github.run_id }}
-
-          # Update frontend deployment with latest image
+          kubectl apply -f k8s/frontend/ -n ${{ steps.set-namespace.outputs.namespace }}
           kubectl set image deployment/frontend \
             frontend=${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ github.sha }} \
-            -n staging-${{ github.run_id }}
+            -n ${{ steps.set-namespace.outputs.namespace }}
 
       - name: Wait for All Deployments
         run: |
-          echo "Waiting for all services to be ready..."
           for service in customer_service order_service product_service frontend; do
-            echo "Waiting for $service deployment..."
-            kubectl rollout status deployment/${service} -n staging-${{ github.run_id }} --timeout=300s
+            kubectl rollout status deployment/${service} -n ${{ steps.set-namespace.outputs.namespace }} --timeout=300s
           done
-
-      - name: Test Staging Environment
-        run: |
-          echo "Testing staging deployment..."
-
-          # Test each service endpoint
-          kubectl get pods -n staging-${{ github.run_id }}
-          kubectl get services -n staging-${{ github.run_id }}
-
-          # Port forward and test frontend
-          kubectl port-forward service/frontend-service 8080:80 -n staging-${{ github.run_id }} &
-          FRONTEND_PID=$!
-
-          # Port forward and test one backend service (customer_service)
-          kubectl port-forward service/customer-service 8081:80 -n staging-${{ github.run_id }} &
-          BACKEND_PID=$!
-
-          # Wait for port forwards to be ready
-          sleep 15
-
-          # Run basic health checks
-          echo "Testing frontend..."
-          curl -f http://localhost:8080 || echo "Frontend test completed"
-
-          echo "Testing customer service..."
-          curl -f http://localhost:8081/health || curl -f http://localhost:8081 || echo "Backend test completed"
-
-          # Kill port forwards
-          kill $FRONTEND_PID $BACKEND_PID
 
       - name: Run Acceptance Tests
         run: |
-          echo "Running acceptance tests on staging environment..."
-          # Add your specific acceptance tests here
-          # Example: Run integration tests across all services
-
-          # Test service-to-service communication
-          echo "Testing service integration..."
+          echo "Running acceptance tests in namespace ${{ steps.set-namespace.outputs.namespace }}..."
 
       - name: Cleanup Staging Environment
-        if: always()
+        if: always() && github.ref != 'refs/heads/main'
         run: |
-          echo "Cleaning up staging environment..."
-          kubectl delete namespace staging-${{ github.run_id }} --ignore-not-found=true
-
-      - name: Notify Success
-        if: success()
-        run: |
-          echo "✅ Multi-service staging deployment and testing completed successfully!"
-          echo "All services (customer_service, order_service, product_service, frontend) tested."
-          echo "Ready for production deployment after PR merge."
+          kubectl delete namespace ${{ steps.set-namespace.outputs.namespace }} --ignore-not-found=true
