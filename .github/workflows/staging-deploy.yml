@@ -1,117 +1,117 @@
-# name: Stage 2 - Staging Deployment
+name: Stage 2 - Staging Deployment
 
-# on:
-#   workflow_run:
-#     workflows: ["CI Pipeline - Testing Branch"]
-#     types: [completed]
+on:
+  workflow_run:
+    workflows: ["CI Pipeline - Testing Branch"]
+    types: [completed]
 
-# jobs:
-#   staging-deployment:
-#     if: ${{ github.event.workflow_run.conclusion == 'success' }}
-#     runs-on: ubuntu-latest
+jobs:
+  staging-deployment:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
 
-#     steps:
-#       - name: Checkout code
-#         uses: actions/checkout@v4
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-#       - name: Azure Login
-#         uses: azure/login@v1
-#         with:
-#           creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-#       - name: Connect to AKS
-#         run: |
-#           az aks get-credentials \
-#             --resource-group teddysit722Week10 \
-#             --name aksteddy722Week10
+      - name: Connect to AKS
+        run: |
+          az aks get-credentials \
+            --resource-group teddysit722Week10 \
+            --name aksteddy722Week10
 
-#       - name: Create Staging Namespace
-#         run: |
-#           # Create unique staging namespace for this pipeline run
-#           kubectl create namespace staging-${{ github.run_id }} || echo "Namespace already exists"
+      - name: Create Staging Namespace
+        run: |
+          # Create unique staging namespace for this pipeline run
+          kubectl create namespace staging-${{ github.run_id }} || echo "Namespace already exists"
 
-#       - name: Deploy Backend Services to Staging
-#         run: |
-#           # Deploy each backend service
-#           for service in customer_service order_service product_service; do
-#             echo "Deploying $service to staging..."
+      - name: Deploy Backend Services to Staging
+        run: |
+          # Deploy each backend service
+          for service in customer_service order_service product_service; do
+            echo "Deploying $service to staging..."
 
-#             # Apply Kubernetes manifests for each service
-#             kubectl apply -f k8s/${service}/ -n staging-${{ github.run_id }}
+            # Apply Kubernetes manifests for each service
+            kubectl apply -f k8s/${service}/ -n staging-${{ github.run_id }}
 
-#             # Update deployment with latest image from ACR
-#             kubectl set image deployment/${service} \
-#               ${service}=${{ secrets.ACR_LOGIN_SERVER }}/${service}:${{ github.sha }} \
-#               -n staging-${{ github.run_id }}
-#           done
+            # Update deployment with latest image from ACR
+            kubectl set image deployment/${service} \
+              ${service}=${{ secrets.ACR_LOGIN_SERVER }}/${service}:${{ github.sha }} \
+              -n staging-${{ github.run_id }}
+          done
 
-#       - name: Deploy Frontend to Staging
-#         run: |
-#           echo "Deploying frontend to staging..."
+      - name: Deploy Frontend to Staging
+        run: |
+          echo "Deploying frontend to staging..."
 
-#           # Apply frontend Kubernetes manifests
-#           kubectl apply -f k8s/frontend/ -n staging-${{ github.run_id }}
+          # Apply frontend Kubernetes manifests
+          kubectl apply -f k8s/frontend/ -n staging-${{ github.run_id }}
 
-#           # Update frontend deployment with latest image
-#           kubectl set image deployment/frontend \
-#             frontend=${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ github.sha }} \
-#             -n staging-${{ github.run_id }}
+          # Update frontend deployment with latest image
+          kubectl set image deployment/frontend \
+            frontend=${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ github.sha }} \
+            -n staging-${{ github.run_id }}
 
-#       - name: Wait for All Deployments
-#         run: |
-#           echo "Waiting for all services to be ready..."
-#           for service in customer_service order_service product_service frontend; do
-#             echo "Waiting for $service deployment..."
-#             kubectl rollout status deployment/${service} -n staging-${{ github.run_id }} --timeout=300s
-#           done
+      - name: Wait for All Deployments
+        run: |
+          echo "Waiting for all services to be ready..."
+          for service in customer_service order_service product_service frontend; do
+            echo "Waiting for $service deployment..."
+            kubectl rollout status deployment/${service} -n staging-${{ github.run_id }} --timeout=300s
+          done
 
-#       - name: Test Staging Environment
-#         run: |
-#           echo "Testing staging deployment..."
+      - name: Test Staging Environment
+        run: |
+          echo "Testing staging deployment..."
 
-#           # Test each service endpoint
-#           kubectl get pods -n staging-${{ github.run_id }}
-#           kubectl get services -n staging-${{ github.run_id }}
+          # Test each service endpoint
+          kubectl get pods -n staging-${{ github.run_id }}
+          kubectl get services -n staging-${{ github.run_id }}
 
-#           # Port forward and test frontend
-#           kubectl port-forward service/frontend-service 8080:80 -n staging-${{ github.run_id }} &
-#           FRONTEND_PID=$!
+          # Port forward and test frontend
+          kubectl port-forward service/frontend-service 8080:80 -n staging-${{ github.run_id }} &
+          FRONTEND_PID=$!
 
-#           # Port forward and test one backend service (customer_service)
-#           kubectl port-forward service/customer-service 8081:80 -n staging-${{ github.run_id }} &
-#           BACKEND_PID=$!
+          # Port forward and test one backend service (customer_service)
+          kubectl port-forward service/customer-service 8081:80 -n staging-${{ github.run_id }} &
+          BACKEND_PID=$!
 
-#           # Wait for port forwards to be ready
-#           sleep 15
+          # Wait for port forwards to be ready
+          sleep 15
 
-#           # Run basic health checks
-#           echo "Testing frontend..."
-#           curl -f http://localhost:8080 || echo "Frontend test completed"
+          # Run basic health checks
+          echo "Testing frontend..."
+          curl -f http://localhost:8080 || echo "Frontend test completed"
 
-#           echo "Testing customer service..."
-#           curl -f http://localhost:8081/health || curl -f http://localhost:8081 || echo "Backend test completed"
+          echo "Testing customer service..."
+          curl -f http://localhost:8081/health || curl -f http://localhost:8081 || echo "Backend test completed"
 
-#           # Kill port forwards
-#           kill $FRONTEND_PID $BACKEND_PID
+          # Kill port forwards
+          kill $FRONTEND_PID $BACKEND_PID
 
-#       - name: Run Acceptance Tests
-#         run: |
-#           echo "Running acceptance tests on staging environment..."
-#           # Add your specific acceptance tests here
-#           # Example: Run integration tests across all services
+      - name: Run Acceptance Tests
+        run: |
+          echo "Running acceptance tests on staging environment..."
+          # Add your specific acceptance tests here
+          # Example: Run integration tests across all services
 
-#           # Test service-to-service communication
-#           echo "Testing service integration..."
+          # Test service-to-service communication
+          echo "Testing service integration..."
 
-#       - name: Cleanup Staging Environment
-#         if: always()
-#         run: |
-#           echo "Cleaning up staging environment..."
-#           kubectl delete namespace staging-${{ github.run_id }} --ignore-not-found=true
+      - name: Cleanup Staging Environment
+        if: always()
+        run: |
+          echo "Cleaning up staging environment..."
+          kubectl delete namespace staging-${{ github.run_id }} --ignore-not-found=true
 
-#       - name: Notify Success
-#         if: success()
-#         run: |
-#           echo "✅ Multi-service staging deployment and testing completed successfully!"
-#           echo "All services (customer_service, order_service, product_service, frontend) tested."
-#           echo "Ready for production deployment after PR merge."
+      - name: Notify Success
+        if: success()
+        run: |
+          echo "✅ Multi-service staging deployment and testing completed successfully!"
+          echo "All services (customer_service, order_service, product_service, frontend) tested."
+          echo "Ready for production deployment after PR merge."
