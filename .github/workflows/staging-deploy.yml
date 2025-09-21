@@ -60,11 +60,8 @@ jobs:
       - name: Deploy Backend Services to Staging
         run: |
           echo "Deploying backend services to staging..."
-
           for service in customer_service order_service product_service; do
             echo "📦 Deploying $service to $STAGING_NAMESPACE"
-            
-            # Convert service name to Kubernetes-compliant format (replace _ with -)
             K8S_SERVICE_NAME=$(echo $service | sed 's/_/-/g')
             
             if [ -d "k8s/${service}" ]; then
@@ -72,32 +69,27 @@ jobs:
               kubectl apply -f k8s/${service}/ -n $STAGING_NAMESPACE
             else
               echo "Creating basic deployment for $service as $K8S_SERVICE_NAME"
-              # Create basic deployment if manifests don't exist
               kubectl create deployment $K8S_SERVICE_NAME \
                 --image=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG \
                 -n $STAGING_NAMESPACE \
                 --dry-run=client -o yaml | kubectl apply -f -
-              
-              # Expose the service
               kubectl expose deployment $K8S_SERVICE_NAME \
                 --port=80 --target-port=80 \
                 --name=${K8S_SERVICE_NAME}-service \
                 -n $STAGING_NAMESPACE \
                 --dry-run=client -o yaml | kubectl apply -f -
             fi
-            
-            # Update image if deployment already exists
+
             kubectl set image deployment/$K8S_SERVICE_NAME \
               $K8S_SERVICE_NAME=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG \
               -n $STAGING_NAMESPACE || echo "Deployment $K8S_SERVICE_NAME not found, skipping image update"
-              
+
             echo "✅ $service deployment completed as $K8S_SERVICE_NAME"
           done
 
       - name: Deploy Frontend to Staging
         run: |
           echo "📦 Deploying frontend to $STAGING_NAMESPACE"
-
           if [ -d "k8s/frontend" ]; then
             echo "Using existing frontend manifests"
             kubectl apply -f k8s/frontend/ -n $STAGING_NAMESPACE
@@ -107,7 +99,6 @@ jobs:
               --image=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG \
               -n $STAGING_NAMESPACE \
               --dry-run=client -o yaml | kubectl apply -f -
-            
             kubectl expose deployment frontend \
               --port=80 --target-port=80 \
               --name=frontend-service \
@@ -118,7 +109,6 @@ jobs:
           kubectl set image deployment/frontend \
             frontend=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG \
             -n $STAGING_NAMESPACE || echo "Frontend deployment not found, skipping image update"
-
           echo "✅ Frontend deployment completed"
 
       - name: Wait for All Deployments
@@ -145,11 +135,13 @@ jobs:
       - name: Run Staging Environment Tests
         run: |
           echo "🧪 Running staging environment tests..."
+          
+          NAMESPACE="$STAGING_NAMESPACE"
 
-          # Frontend service test
+          # --- Test Frontend via Port-Forward ---
           FRONTEND_SERVICE="frontend-service"
           echo "Testing frontend via port-forward..."
-          kubectl port-forward service/$FRONTEND_SERVICE 8080:80 -n $STAGING_NAMESPACE &
+          kubectl port-forward service/$FRONTEND_SERVICE 8080:80 -n $NAMESPACE &
           PF_PID=$!
           sleep 10
           if curl -f -s http://localhost:8080 >/dev/null 2>&1; then
@@ -160,15 +152,26 @@ jobs:
           kill $PF_PID 2>/dev/null || true
           sleep 2
 
-          # Backend services health check
+          # --- Test Backend Services via Python inside Pod ---
           BACKEND_SERVICES=("customer-service" "order-service" "product-service")
           for svc in "${BACKEND_SERVICES[@]}"; do
             echo "Testing backend service: $svc"
-            POD=$(kubectl get pods -n $STAGING_NAMESPACE -l app=$svc -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+            POD=$(kubectl get pods -n $NAMESPACE -l app=$svc -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
             if [ -n "$POD" ]; then
-              kubectl exec $POD -n $STAGING_NAMESPACE -- sh -c 'curl -f -s http://localhost:8000/health >/dev/null 2>&1' && \
-                echo "✅ $svc is healthy" || \
-                echo "⚠️ $svc health check completed (no response)"
+              kubectl exec $POD -n $NAMESPACE -- python - <<PYTHON_SCRIPT
+import sys
+try:
+    import urllib.request
+    response = urllib.request.urlopen('http://localhost:8000/health', timeout=5)
+    if response.getcode() == 200:
+        print("✅ $svc is healthy")
+    else:
+        print("⚠️ $svc health check returned status", response.getcode())
+        sys.exit(1)
+except Exception as e:
+    print("⚠️ $svc health check failed:", e)
+    sys.exit(1)
+PYTHON_SCRIPT
             else
               echo "⚠️ No pod found for $svc, skipping health check"
             fi
