@@ -7,7 +7,6 @@ on:
       - completed
     branches:
       - testing
-      - main
 
 jobs:
   staging-deployment:
@@ -62,31 +61,34 @@ jobs:
           for service in customer_service order_service product_service; do
             echo "📦 Deploying $service to staging-${{ github.run_id }}"
             
+            # Convert service name to Kubernetes-compliant format (replace _ with -)
+            K8S_SERVICE_NAME=$(echo $service | sed 's/_/-/g')
+            
             if [ -d "k8s/${service}" ]; then
               echo "Using existing manifests for $service"
               kubectl apply -f k8s/${service}/ -n $STAGING_NAMESPACE
             else
-              echo "Creating basic deployment for $service"
+              echo "Creating basic deployment for $service as $K8S_SERVICE_NAME"
               # Create basic deployment if manifests don't exist
-              kubectl create deployment $service \
+              kubectl create deployment $K8S_SERVICE_NAME \
                 --image=${{ secrets.ACR_LOGIN_SERVER }}/${service}:${{ github.event.workflow_run.head_sha }} \
                 -n $STAGING_NAMESPACE \
                 --dry-run=client -o yaml | kubectl apply -f -
               
               # Expose the service
-              kubectl expose deployment $service \
+              kubectl expose deployment $K8S_SERVICE_NAME \
                 --port=80 --target-port=80 \
-                --name=${service}-service \
+                --name=${K8S_SERVICE_NAME}-service \
                 -n $STAGING_NAMESPACE \
                 --dry-run=client -o yaml | kubectl apply -f -
             fi
             
             # Update image if deployment already exists
-            kubectl set image deployment/${service} \
-              ${service}=${{ secrets.ACR_LOGIN_SERVER }}/${service}:${{ github.event.workflow_run.head_sha }} \
-              -n $STAGING_NAMESPACE || echo "Deployment $service not found, skipping image update"
+            kubectl set image deployment/${K8S_SERVICE_NAME} \
+              ${K8S_SERVICE_NAME}=${{ secrets.ACR_LOGIN_SERVER }}/${service}:${{ github.event.workflow_run.head_sha }} \
+              -n $STAGING_NAMESPACE || echo "Deployment $K8S_SERVICE_NAME not found, skipping image update"
               
-            echo "✅ $service deployment completed"
+            echo "✅ $service deployment completed as $K8S_SERVICE_NAME"
           done
 
       - name: Deploy Frontend to Staging
@@ -195,16 +197,16 @@ jobs:
           echo "🔗 Running integration tests..."
 
           # Check if services can communicate with each other
-          CUSTOMER_POD=$(kubectl get pods -n $STAGING_NAMESPACE -l app=customer_service -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+          CUSTOMER_POD=$(kubectl get pods -n $STAGING_NAMESPACE -l app=customer-service -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
 
           if [ -n "$CUSTOMER_POD" ]; then
             echo "Testing inter-service communication from $CUSTOMER_POD"
             
             # Test if customer service can reach other services
             for target_service in order-service product-service; do
-              kubectl exec $CUSTOMER_POD -n $STAGING_NAMESPACE -- curl -f -s http://$target_service:80 >/dev/null 2>&1 && \
-                echo "✅ $CUSTOMER_POD can reach $target_service" || \
-                echo "⚠️  $target_service communication test completed"
+              kubectl exec $CUSTOMER_POD -n $STAGING_NAMESPACE -- curl -f -s http://$target_service-service:80 >/dev/null 2>&1 && \
+                echo "✅ $CUSTOMER_POD can reach $target_service-service" || \
+                echo "⚠️  $target_service-service communication test completed"
             done
           else
             echo "No customer service pod found, skipping integration tests"
@@ -231,9 +233,9 @@ jobs:
           echo "✅ Environment ready for production deployment"
           echo ""
           echo "Images deployed:"
-          echo "  - customer_service:${{ github.event.workflow_run.head_sha }}"
-          echo "  - order_service:${{ github.event.workflow_run.head_sha }}"
-          echo "  - product_service:${{ github.event.workflow_run.head_sha }}"
+          echo "  - customer-service:${{ github.event.workflow_run.head_sha }}"
+          echo "  - order-service:${{ github.event.workflow_run.head_sha }}"
+          echo "  - product-service:${{ github.event.workflow_run.head_sha }}"
           echo "  - frontend:${{ github.event.workflow_run.head_sha }}"
 
       - name: Cleanup Staging Environment
@@ -266,6 +268,10 @@ jobs:
           echo "✅ All services deployed to staging environment"
           echo "✅ Comprehensive testing completed"
           echo "✅ Staging environment destroyed"
+          echo ""
+          echo "🚀 Ready for Stage 3 (Production Deployment)"
+          echo "   → Create a Pull Request from 'testing' to 'main'"
+          echo "   → Merge the PR to trigger production deployment"
 
       - name: Failure Notification
         if: failure()
