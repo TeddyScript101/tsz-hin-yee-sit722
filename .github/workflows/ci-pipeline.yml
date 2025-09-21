@@ -104,5 +104,13 @@ jobs:
           else
             cd backend/${{ matrix.service }}
           fi
+
+          # Build and tag with commit SHA
           docker build -t ${{ secrets.ACR_LOGIN_SERVER }}/${{ matrix.service }}:${{ github.sha }} .
           docker push ${{ secrets.ACR_LOGIN_SERVER }}/${{ matrix.service }}:${{ github.sha }}
+
+          # Also tag and push as 'latest' for production deployment
+          docker tag ${{ secrets.ACR_LOGIN_SERVER }}/${{ matrix.service }}:${{ github.sha }} ${{ secrets.ACR_LOGIN_SERVER }}/${{ matrix.service }}:latest
+          docker push ${{ secrets.ACR_LOGIN_SERVER }}/${{ matrix.service }}:latest
+
+          echo "✅ Built and pushed ${{ matrix.service }} with tags: ${{ github.sha }} and latest"
