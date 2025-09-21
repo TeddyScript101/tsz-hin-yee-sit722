@@ -3,7 +3,7 @@ name: Stage 3 - Production Deployment (Test Mode)
 on:
   push:
     branches:
-      - main # Trigger when code is pushed or PR is merged to main
+      - main
 
 jobs:
   deploy-production-test:
@@ -13,7 +13,7 @@ jobs:
       RESOURCE_GROUP: teddysit722Week10
       AKS_NAME: aksteddy722Week10
       ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
-      IMAGE_TAG: latest # Use any test image tag available in your ACR
+      IMAGE_TAG: latest
 
     steps:
       - name: Checkout Code
