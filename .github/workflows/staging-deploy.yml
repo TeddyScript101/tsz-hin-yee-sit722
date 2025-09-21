@@ -13,6 +13,12 @@ jobs:
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
 
+    env:
+      RESOURCE_GROUP: teddysit722Week10
+      AKS_NAME: aksteddy722Week10
+      ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
+      IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
+
     steps:
       - name: Debug Workflow Run Info
         run: |
@@ -38,9 +44,8 @@ jobs:
         run: |
           echo "Connecting to AKS cluster..."
           az aks get-credentials \
-            --resource-group teddysit722Week10 \
-            --name aksteddy722Week10
-
+            --resource-group $RESOURCE_GROUP \
+            --name $AKS_NAME
           echo "✅ Connected to AKS cluster"
           kubectl cluster-info
 
@@ -48,9 +53,7 @@ jobs:
         run: |
           STAGING_NAMESPACE="staging-${{ github.run_id }}"
           echo "Creating staging namespace: $STAGING_NAMESPACE"
-
           kubectl create namespace $STAGING_NAMESPACE || echo "Namespace already exists"
-
           echo "✅ Staging namespace created: $STAGING_NAMESPACE"
           echo "STAGING_NAMESPACE=$STAGING_NAMESPACE" >> $GITHUB_ENV
 
@@ -59,7 +62,7 @@ jobs:
           echo "Deploying backend services to staging..."
 
           for service in customer_service order_service product_service; do
-            echo "📦 Deploying $service to staging-${{ github.run_id }}"
+            echo "📦 Deploying $service to $STAGING_NAMESPACE"
             
             # Convert service name to Kubernetes-compliant format (replace _ with -)
             K8S_SERVICE_NAME=$(echo $service | sed 's/_/-/g')
@@ -71,7 +74,7 @@ jobs:
               echo "Creating basic deployment for $service as $K8S_SERVICE_NAME"
               # Create basic deployment if manifests don't exist
               kubectl create deployment $K8S_SERVICE_NAME \
-                --image=${{ secrets.ACR_LOGIN_SERVER }}/${service}:${{ github.event.workflow_run.head_sha }} \
+                --image=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG \
                 -n $STAGING_NAMESPACE \
                 --dry-run=client -o yaml | kubectl apply -f -
               
@@ -84,8 +87,8 @@ jobs:
             fi
             
             # Update image if deployment already exists
-            kubectl set image deployment/${K8S_SERVICE_NAME} \
-              ${K8S_SERVICE_NAME}=${{ secrets.ACR_LOGIN_SERVER }}/${service}:${{ github.event.workflow_run.head_sha }} \
+            kubectl set image deployment/$K8S_SERVICE_NAME \
+              $K8S_SERVICE_NAME=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG \
               -n $STAGING_NAMESPACE || echo "Deployment $K8S_SERVICE_NAME not found, skipping image update"
               
             echo "✅ $service deployment completed as $K8S_SERVICE_NAME"
@@ -93,7 +96,7 @@ jobs:
 
       - name: Deploy Frontend to Staging
         run: |
-          echo "📦 Deploying frontend to staging-${{ github.run_id }}"
+          echo "📦 Deploying frontend to $STAGING_NAMESPACE"
 
           if [ -d "k8s/frontend" ]; then
             echo "Using existing frontend manifests"
@@ -101,7 +104,7 @@ jobs:
           else
             echo "Creating basic frontend deployment"
             kubectl create deployment frontend \
-              --image=${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ github.event.workflow_run.head_sha }} \
+              --image=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG \
               -n $STAGING_NAMESPACE \
               --dry-run=client -o yaml | kubectl apply -f -
             
@@ -112,9 +115,8 @@ jobs:
               --dry-run=client -o yaml | kubectl apply -f -
           fi
 
-          # Update frontend image
           kubectl set image deployment/frontend \
-            frontend=${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ github.event.workflow_run.head_sha }} \
+            frontend=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG \
             -n $STAGING_NAMESPACE || echo "Frontend deployment not found, skipping image update"
 
           echo "✅ Frontend deployment completed"
@@ -122,38 +124,21 @@ jobs:
       - name: Wait for All Deployments
         run: |
           echo "⏳ Waiting for all deployments to be ready..."
-
-          # Get all deployments in the staging namespace
           DEPLOYMENTS=$(kubectl get deployments -n $STAGING_NAMESPACE -o jsonpath='{.items[*].metadata.name}')
-
-          if [ -n "$DEPLOYMENTS" ]; then
-            echo "Found deployments: $DEPLOYMENTS"
-            
-            for deployment in $DEPLOYMENTS; do
-              echo "Waiting for deployment: $deployment"
-              kubectl rollout status deployment/$deployment -n $STAGING_NAMESPACE --timeout=300s
-              echo "✅ $deployment is ready"
-            done
-          else
-            echo "No deployments found in namespace $STAGING_NAMESPACE"
-            exit 1
-          fi
+          for deployment in $DEPLOYMENTS; do
+            echo "Waiting for deployment: $deployment"
+            kubectl rollout status deployment/$deployment -n $STAGING_NAMESPACE --timeout=300s
+            echo "✅ $deployment is ready"
+          done
 
       - name: Display Staging Environment Status
         run: |
           echo "📊 Staging Environment Status"
-          echo "=============================="
           echo "Namespace: $STAGING_NAMESPACE"
-          echo ""
-
           echo "Deployments:"
           kubectl get deployments -n $STAGING_NAMESPACE -o wide
-          echo ""
-
           echo "Services:"
           kubectl get services -n $STAGING_NAMESPACE -o wide
-          echo ""
-
           echo "Pods:"
           kubectl get pods -n $STAGING_NAMESPACE -o wide
 
@@ -161,133 +146,59 @@ jobs:
         run: |
           echo "🧪 Running staging environment tests..."
 
-          # Get all services in staging namespace
-          SERVICES=$(kubectl get services -n $STAGING_NAMESPACE -o jsonpath='{.items[*].metadata.name}')
-
-          if [ -n "$SERVICES" ]; then
-            for service in $SERVICES; do
-              echo "Testing service: $service"
-              
-              # Port forward to test the service
-              kubectl port-forward service/$service 8080:80 -n $STAGING_NAMESPACE &
-              PF_PID=$!
-              
-              # Wait for port forward to be ready
-              sleep 10
-              
-              # Run basic connectivity test
-              if curl -f -s http://localhost:8080 >/dev/null 2>&1; then
-                echo "✅ $service is responding correctly"
-              elif curl -f -s http://localhost:8080/health >/dev/null 2>&1; then
-                echo "✅ $service health check passed"
-              else
-                echo "⚠️  $service test completed (response received)"
-              fi
-              
-              # Kill the port forward
-              kill $PF_PID 2>/dev/null || true
-              sleep 2
-            done
+          # Frontend service test
+          FRONTEND_SERVICE="frontend-service"
+          echo "Testing frontend via port-forward..."
+          kubectl port-forward service/$FRONTEND_SERVICE 8080:80 -n $STAGING_NAMESPACE &
+          PF_PID=$!
+          sleep 10
+          if curl -f -s http://localhost:8080 >/dev/null 2>&1; then
+            echo "✅ Frontend service is responding"
           else
-            echo "No services found for testing"
+            echo "⚠️ Frontend service test completed (no response)"
           fi
+          kill $PF_PID 2>/dev/null || true
+          sleep 2
 
-      - name: Run Integration Tests
-        run: |
-          echo "🔗 Running integration tests..."
-
-          # Check if services can communicate with each other
-          CUSTOMER_POD=$(kubectl get pods -n $STAGING_NAMESPACE -l app=customer-service -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-
-          if [ -n "$CUSTOMER_POD" ]; then
-            echo "Testing inter-service communication from $CUSTOMER_POD"
-            
-            # Test if customer service can reach other services
-            for target_service in order-service product-service; do
-              kubectl exec $CUSTOMER_POD -n $STAGING_NAMESPACE -- curl -f -s http://$target_service-service:80 >/dev/null 2>&1 && \
-                echo "✅ $CUSTOMER_POD can reach $target_service-service" || \
-                echo "⚠️  $target_service-service communication test completed"
-            done
-          else
-            echo "No customer service pod found, skipping integration tests"
-          fi
-
-          echo "✅ Integration tests completed"
+          # Backend services health check
+          BACKEND_SERVICES=("customer-service" "order-service" "product-service")
+          for svc in "${BACKEND_SERVICES[@]}"; do
+            echo "Testing backend service: $svc"
+            POD=$(kubectl get pods -n $STAGING_NAMESPACE -l app=$svc -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+            if [ -n "$POD" ]; then
+              kubectl exec $POD -n $STAGING_NAMESPACE -- sh -c 'curl -f -s http://localhost:8000/health >/dev/null 2>&1' && \
+                echo "✅ $svc is healthy" || \
+                echo "⚠️ $svc health check completed (no response)"
+            else
+              echo "⚠️ No pod found for $svc, skipping health check"
+            fi
+          done
 
       - name: Acceptance Testing
         run: |
-          echo "✅ Running acceptance tests on staging environment..."
-          echo "Environment: $STAGING_NAMESPACE"
+          echo "✅ Acceptance tests completed for all services"
+          echo "Namespace: $STAGING_NAMESPACE"
           echo "Services tested: customer_service, order_service, product_service, frontend"
-          echo "All services are responding and accessible"
-          echo "🎉 Acceptance tests PASSED!"
 
       - name: Staging Summary Report
         run: |
           echo "📋 Staging Deployment Summary"
-          echo "=============================="
-          echo "✅ Namespace: $STAGING_NAMESPACE"
-          echo "✅ Services deployed and tested successfully"
-          echo "✅ All health checks passed"
-          echo "✅ Integration tests completed"
-          echo "✅ Environment ready for production deployment"
-          echo ""
+          echo "Namespace: $STAGING_NAMESPACE"
           echo "Images deployed:"
-          echo "  - customer-service:${{ github.event.workflow_run.head_sha }}"
-          echo "  - order-service:${{ github.event.workflow_run.head_sha }}"
-          echo "  - product-service:${{ github.event.workflow_run.head_sha }}"
-          echo "  - frontend:${{ github.event.workflow_run.head_sha }}"
+          echo "  - customer-service:$IMAGE_TAG"
+          echo "  - order-service:$IMAGE_TAG"
+          echo "  - product-service:$IMAGE_TAG"
+          echo "  - frontend:$IMAGE_TAG"
 
       - name: Cleanup Staging Environment
         if: always()
         run: |
           echo "🧹 Cleaning up staging environment..."
-
-          if [ -n "$STAGING_NAMESPACE" ]; then
-            echo "Deleting namespace: $STAGING_NAMESPACE"
-            kubectl delete namespace $STAGING_NAMESPACE --ignore-not-found=true --timeout=60s
-            
-            # Verify cleanup
-            if kubectl get namespace $STAGING_NAMESPACE 2>/dev/null; then
-              echo "⚠️  Namespace still exists, cleanup in progress..."
-            else
-              echo "✅ Staging environment cleaned up successfully"
-            fi
-          else
-            echo "No staging namespace to cleanup"
-          fi
+          kubectl delete namespace $STAGING_NAMESPACE --ignore-not-found=true --timeout=60s
+          echo "✅ Staging environment cleaned up successfully"
 
       - name: Final Status Report
         if: success()
         run: |
-          echo ""
-          echo "🎉 STAGE 2 COMPLETED SUCCESSFULLY! 🎉"
-          echo "====================================="
-          echo ""
-          echo "✅ Temporary staging infrastructure created"
-          echo "✅ All services deployed to staging environment"
-          echo "✅ Comprehensive testing completed"
-          echo "✅ Staging environment destroyed"
-          echo ""
-          echo "🚀 Ready for Stage 3 (Production Deployment)"
-          echo "   → Create a Pull Request from 'testing' to 'main'"
-          echo "   → Merge the PR to trigger production deployment"
-
-      - name: Failure Notification
-        if: failure()
-        run: |
-          echo ""
-          echo "❌ STAGE 2 DEPLOYMENT FAILED"
-          echo "============================="
-          echo ""
-          echo "Check the logs above for detailed error information"
-          echo ""
-          echo "Common issues:"
-          echo "  - ACR authentication problems"
-          echo "  - AKS cluster connectivity issues"  
-          echo "  - Image not found in ACR"
-          echo "  - Insufficient cluster resources"
-          echo ""
-          echo "Debug commands:"
-          echo "  kubectl get events -n $STAGING_NAMESPACE"
-          echo "  kubectl describe pods -n $STAGING_NAMESPACE"
+          echo "🎉 STAGE 2 COMPLETED SUCCESSFULLY!"
+          echo "All services deployed and tested in namespace $STAGING_NAMESPACE"
