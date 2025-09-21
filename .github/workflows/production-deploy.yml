@@ -3,7 +3,7 @@ name: Stage 3 - Production Deployment
 on:
   push:
     branches:
-      - main # ✅ Triggers only when PR is merged into main
+      - main # ✅ Trigger only when PR is merged into main
 
 jobs:
   production-deployment:
@@ -13,7 +13,7 @@ jobs:
       RESOURCE_GROUP: teddysit722Week10
       AKS_NAME: aksteddy722Week10
       ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
-      IMAGE_TAG: ${{ github.sha }} # ✅ Ensures we deploy the merged commit
+      IMAGE_TAG: ${{ github.sha }} # ✅ Deploy the exact commit
       PROD_NAMESPACE: production
 
     steps:
@@ -40,47 +40,20 @@ jobs:
             K8S_NAME=$(echo $service | sed 's/_/-/g')
             echo "📦 Deploying $service as $K8S_NAME"
 
-            if [ -d "k8s/$service" ]; then
-              kubectl apply -f k8s/$service/ -n $PROD_NAMESPACE
-            else
-              kubectl create deployment $K8S_NAME \
-                --image=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG \
-                -n $PROD_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
-              kubectl expose deployment $K8S_NAME \
-                --port=80 --target-port=80 \
-                --name=${K8S_NAME}-service \
-                -n $PROD_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
-            fi
+            # Replace registry + tag dynamically
+            sed "s|sit722teddy.azurecr.io|$ACR_LOGIN_SERVER|g; s|:latest|:$IMAGE_TAG|g" k8s/${service}.yaml \
+              | kubectl apply -n $PROD_NAMESPACE -f -
 
-            kubectl label deployment $K8S_NAME app=$K8S_NAME -n $PROD_NAMESPACE --overwrite
-            kubectl set image deployment/$K8S_NAME *=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG -n $PROD_NAMESPACE || echo "⚠️ $K8S_NAME not updated"
+            # Wait for rollout
+            kubectl rollout status deployment/$K8S_NAME -n $PROD_NAMESPACE --timeout=300s
             echo "✅ $service deployed"
           done
 
       - name: Deploy Frontend
         run: |
           echo "📦 Deploying frontend"
-          if [ -d "k8s/frontend" ]; then
-            kubectl apply -f k8s/frontend/ -n $PROD_NAMESPACE
-          else
-            kubectl create deployment frontend \
-              --image=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG \
-              -n $PROD_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
-            kubectl expose deployment frontend \
-              --port=80 --target-port=80 \
-              --name=frontend-service \
-              -n $PROD_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
-          fi
+          sed "s|sit722teddy.azurecr.io|$ACR_LOGIN_SERVER|g; s|:latest|:$IMAGE_TAG|g" k8s/frontend.yaml \
+            | kubectl apply -n $PROD_NAMESPACE -f -
 
-          kubectl set image deployment/frontend *=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG -n $PROD_NAMESPACE
-          kubectl label deployment frontend app=frontend -n $PROD_NAMESPACE --overwrite
+          kubectl rollout status deployment/frontend -n $PROD_NAMESPACE --timeout=300s
           echo "✅ Frontend deployed"
-
-      - name: Wait for Deployments
-        run: |
-          DEPLOYMENTS=$(kubectl get deployments -n $PROD_NAMESPACE -o jsonpath='{.items[*].metadata.name}')
-          for dep in $DEPLOYMENTS; do
-            echo "⏳ Waiting for $dep rollout..."
-            kubectl rollout status deployment/$dep -n $PROD_NAMESPACE --timeout=300s
-            echo "✅ $dep ready"
-          done
