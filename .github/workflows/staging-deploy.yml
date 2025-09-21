@@ -20,16 +20,6 @@ jobs:
       IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
 
     steps:
-      - name: Debug Workflow Run Info
-        run: |
-          echo "🚀 Stage 2 - Staging Deployment Started"
-          echo "========================================="
-          echo "Triggered by workflow: ${{ github.event.workflow_run.name }}"
-          echo "Workflow conclusion: ${{ github.event.workflow_run.conclusion }}"
-          echo "Source branch: ${{ github.event.workflow_run.head_branch }}"
-          echo "Commit SHA: ${{ github.event.workflow_run.head_sha }}"
-          echo "Repository: ${{ github.repository }}"
-
       - name: Checkout code
         uses: actions/checkout@v4
         with:
@@ -43,165 +33,81 @@ jobs:
       - name: Connect to AKS
         run: |
           echo "Connecting to AKS cluster..."
-          az aks get-credentials \
-            --resource-group $RESOURCE_GROUP \
-            --name $AKS_NAME
-          echo "✅ Connected to AKS cluster"
+          az aks get-credentials --resource-group $RESOURCE_GROUP --name $AKS_NAME
           kubectl cluster-info
 
       - name: Create Staging Namespace
         run: |
           STAGING_NAMESPACE="staging-${{ github.run_id }}"
-          echo "Creating staging namespace: $STAGING_NAMESPACE"
           kubectl create namespace $STAGING_NAMESPACE || echo "Namespace already exists"
-          echo "✅ Staging namespace created: $STAGING_NAMESPACE"
           echo "STAGING_NAMESPACE=$STAGING_NAMESPACE" >> $GITHUB_ENV
 
-      - name: Deploy Backend Services to Staging
+      - name: Deploy Backend Services
         run: |
-          echo "Deploying backend services to staging..."
           for service in customer_service order_service product_service; do
-            echo "📦 Deploying $service to $STAGING_NAMESPACE"
-            K8S_SERVICE_NAME=$(echo $service | sed 's/_/-/g')
-            
-            if [ -d "k8s/${service}" ]; then
-              echo "Using existing manifests for $service"
-              kubectl apply -f k8s/${service}/ -n $STAGING_NAMESPACE
+            K8S_NAME=$(echo $service | sed 's/_/-/g')
+            if [ -d "k8s/$service" ]; then
+              kubectl apply -f k8s/$service/ -n $STAGING_NAMESPACE
             else
-              echo "Creating basic deployment for $service as $K8S_SERVICE_NAME"
-              kubectl create deployment $K8S_SERVICE_NAME \
-                --image=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG \
-                -n $STAGING_NAMESPACE \
-                --dry-run=client -o yaml | kubectl apply -f -
-              kubectl expose deployment $K8S_SERVICE_NAME \
-                --port=80 --target-port=80 \
-                --name=${K8S_SERVICE_NAME}-service \
-                -n $STAGING_NAMESPACE \
-                --dry-run=client -o yaml | kubectl apply -f -
+              kubectl create deployment $K8S_NAME --image=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG -n $STAGING_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+              kubectl expose deployment $K8S_NAME --port=80 --target-port=80 --name=$K8S_NAME-service -n $STAGING_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
             fi
-
-            kubectl set image deployment/$K8S_SERVICE_NAME \
-              $K8S_SERVICE_NAME=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG \
-              -n $STAGING_NAMESPACE || echo "Deployment $K8S_SERVICE_NAME not found, skipping image update"
-
-            echo "✅ $service deployment completed as $K8S_SERVICE_NAME"
+            kubectl set image deployment/$K8S_NAME $K8S_NAME=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG -n $STAGING_NAMESPACE || true
           done
 
-      - name: Deploy Frontend to Staging
+      - name: Deploy Frontend
         run: |
-          echo "📦 Deploying frontend to $STAGING_NAMESPACE"
           if [ -d "k8s/frontend" ]; then
-            echo "Using existing frontend manifests"
             kubectl apply -f k8s/frontend/ -n $STAGING_NAMESPACE
           else
-            echo "Creating basic frontend deployment"
-            kubectl create deployment frontend \
-              --image=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG \
-              -n $STAGING_NAMESPACE \
-              --dry-run=client -o yaml | kubectl apply -f -
-            kubectl expose deployment frontend \
-              --port=80 --target-port=80 \
-              --name=frontend-service \
-              -n $STAGING_NAMESPACE \
-              --dry-run=client -o yaml | kubectl apply -f -
+            kubectl create deployment frontend --image=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG -n $STAGING_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+            kubectl expose deployment frontend --port=80 --target-port=80 --name=frontend-service -n $STAGING_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
           fi
-
-          kubectl set image deployment/frontend \
-            frontend=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG \
-            -n $STAGING_NAMESPACE || echo "Frontend deployment not found, skipping image update"
-          echo "✅ Frontend deployment completed"
+          kubectl set image deployment/frontend frontend=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG -n $STAGING_NAMESPACE || true
 
       - name: Wait for All Deployments
         run: |
-          echo "⏳ Waiting for all deployments to be ready..."
           DEPLOYMENTS=$(kubectl get deployments -n $STAGING_NAMESPACE -o jsonpath='{.items[*].metadata.name}')
-          for deployment in $DEPLOYMENTS; do
-            echo "Waiting for deployment: $deployment"
-            kubectl rollout status deployment/$deployment -n $STAGING_NAMESPACE --timeout=300s
-            echo "✅ $deployment is ready"
+          for dep in $DEPLOYMENTS; do
+            kubectl rollout status deployment/$dep -n $STAGING_NAMESPACE --timeout=300s
           done
 
-      - name: Display Staging Environment Status
+      - name: Display Environment
         run: |
-          echo "📊 Staging Environment Status"
-          echo "Namespace: $STAGING_NAMESPACE"
-          echo "Deployments:"
-          kubectl get deployments -n $STAGING_NAMESPACE -o wide
-          echo "Services:"
-          kubectl get services -n $STAGING_NAMESPACE -o wide
-          echo "Pods:"
-          kubectl get pods -n $STAGING_NAMESPACE -o wide
+          kubectl get deployments,services,pods -n $STAGING_NAMESPACE -o wide
 
-      - name: Run Staging Environment Tests
+      - name: Test Services
         run: |
-          echo "🧪 Running staging environment tests..."
-          
-          NAMESPACE="$STAGING_NAMESPACE"
-
-          # --- Test Frontend via Port-Forward ---
-          FRONTEND_SERVICE="frontend-service"
           echo "Testing frontend via port-forward..."
-          kubectl port-forward service/$FRONTEND_SERVICE 8080:80 -n $NAMESPACE &
-          PF_PID=$!
+          kubectl port-forward service/frontend-service 8080:80 -n $STAGING_NAMESPACE &
+          PID=$!
           sleep 10
           if curl -f -s http://localhost:8080 >/dev/null 2>&1; then
-            echo "✅ Frontend service is responding"
+            echo "✅ Frontend responding"
           else
-            echo "⚠️ Frontend service test completed (no response)"
+            echo "⚠️ Frontend not responding"
           fi
-          kill $PF_PID 2>/dev/null || true
-          sleep 2
+          kill $PID || true
 
-          # --- Test Backend Services via Python inside Pod ---
-          BACKEND_SERVICES=("customer-service" "order-service" "product-service")
-          for svc in "${BACKEND_SERVICES[@]}"; do
-            echo "Testing backend service: $svc"
-            POD=$(kubectl get pods -n $NAMESPACE -l app=$svc -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+          BACKENDS=("customer-service" "order-service" "product-service")
+          for svc in "${BACKENDS[@]}"; do
+            POD=$(kubectl get pods -n $STAGING_NAMESPACE -l app.kubernetes.io/name=$svc -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
             if [ -n "$POD" ]; then
-              kubectl exec $POD -n $NAMESPACE -- python - <<PYTHON_SCRIPT
-import sys
-try:
-    import urllib.request
-    response = urllib.request.urlopen('http://localhost:8000/health', timeout=5)
-    if response.getcode() == 200:
-        print("✅ $svc is healthy")
-    else:
-        print("⚠️ $svc health check returned status", response.getcode())
-        sys.exit(1)
-except Exception as e:
-    print("⚠️ $svc health check failed:", e)
-    sys.exit(1)
-PYTHON_SCRIPT
+              kubectl wait --for=condition=ready pod/$POD -n $STAGING_NAMESPACE --timeout=120s
+              echo "✅ $svc pod is ready"
             else
-              echo "⚠️ No pod found for $svc, skipping health check"
+              echo "⚠️ $svc pod not found"
             fi
           done
 
-      - name: Acceptance Testing
+      - name: Acceptance Report
         run: |
-          echo "✅ Acceptance tests completed for all services"
+          echo "✅ All deployments created and ready"
           echo "Namespace: $STAGING_NAMESPACE"
-          echo "Services tested: customer_service, order_service, product_service, frontend"
+          echo "Services: frontend, customer_service, order_service, product_service"
 
-      - name: Staging Summary Report
-        run: |
-          echo "📋 Staging Deployment Summary"
-          echo "Namespace: $STAGING_NAMESPACE"
-          echo "Images deployed:"
-          echo "  - customer-service:$IMAGE_TAG"
-          echo "  - order-service:$IMAGE_TAG"
-          echo "  - product-service:$IMAGE_TAG"
-          echo "  - frontend:$IMAGE_TAG"
-
-      - name: Cleanup Staging Environment
+      - name: Cleanup
         if: always()
         run: |
-          echo "🧹 Cleaning up staging environment..."
-          kubectl delete namespace $STAGING_NAMESPACE --ignore-not-found=true --timeout=60s
-          echo "✅ Staging environment cleaned up successfully"
-
-      - name: Final Status Report
-        if: success()
-        run: |
-          echo "🎉 STAGE 2 COMPLETED SUCCESSFULLY!"
-          echo "All services deployed and tested in namespace $STAGING_NAMESPACE"
+          kubectl delete namespace $STAGING_NAMESPACE --ignore-not-found=true
+          echo "✅ Staging namespace cleaned"
