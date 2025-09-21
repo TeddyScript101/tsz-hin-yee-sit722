@@ -1,0 +1,80 @@
+name: Stage 3 - Production Deployment
+
+on:
+  push:
+    branches:
+      - main # Triggered when PR is merged into main
+
+jobs:
+  deploy-production:
+    runs-on: ubuntu-latest
+
+    env:
+      RESOURCE_GROUP: teddysit722Week10
+      AKS_NAME: aksteddy722Week10
+      ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
+      IMAGE_TAG: ${{ github.sha }} # Commit SHA of merged PR
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Connect to AKS
+        run: |
+          az aks get-credentials --resource-group $RESOURCE_GROUP --name $AKS_NAME
+          kubectl cluster-info
+
+      - name: Deploy Backend Services
+        run: |
+          for service in customer_service order_service product_service; do
+            K8S_NAME=$(echo $service | sed 's/_/-/g')
+            echo "Deploying $service to production as $K8S_NAME"
+
+            if [ -d "k8s/$service" ]; then
+              kubectl apply -f k8s/$service/ -n production
+            else
+              kubectl create deployment $K8S_NAME \
+                --image=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG \
+                -n production --dry-run=client -o yaml | kubectl apply -f -
+              kubectl expose deployment $K8S_NAME \
+                --port=80 --target-port=80 \
+                --name=${K8S_NAME}-service \
+                -n production --dry-run=client -o yaml | kubectl apply -f -
+            fi
+
+            kubectl set image deployment/$K8S_NAME $K8S_NAME=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG -n production || echo "$K8S_NAME not found"
+          done
+
+      - name: Deploy Frontend
+        run: |
+          if [ -d "k8s/frontend" ]; then
+            kubectl apply -f k8s/frontend/ -n production
+          else
+            kubectl create deployment frontend \
+              --image=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG \
+              -n production --dry-run=client -o yaml | kubectl apply -f -
+            kubectl expose deployment frontend \
+              --port=80 --target-port=80 \
+              --name=frontend-service \
+              -n production --dry-run=client -o yaml | kubectl apply -f -
+          fi
+          kubectl set image deployment/frontend frontend=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG -n production || echo "frontend not found"
+
+      - name: Wait for Deployments
+        run: |
+          DEPLOYMENTS=$(kubectl get deployments -n production -o jsonpath='{.items[*].metadata.name}')
+          for dep in $DEPLOYMENTS; do
+            echo "Waiting for deployment $dep..."
+            kubectl rollout status deployment/$dep -n production --timeout=300s
+          done
+
+      - name: Production Health Check
+        run: |
+          echo "Checking if all pods are running..."
+          kubectl get pods -n production -o wide
+          echo "✅ Production deployment complete"
