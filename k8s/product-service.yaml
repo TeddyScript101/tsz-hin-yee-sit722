@@ -18,7 +18,8 @@ spec:
     spec:
       containers:
         - name: product-service-container
-          image: teddyacr722week10.azurecr.io/product_service:latest
+
+          image: teddyacr722week10.azurecr.io/product_service:${IMAGE_TAG}
           imagePullPolicy: Always
           ports:
             - containerPort: 8000

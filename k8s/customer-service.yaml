@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: customer-service-container
-          image: teddyacr722week10.azurecr.io/customer_service:latest
+          image: teddyacr722week10.azurecr.io/customer_service:${IMAGE_TAG}
           imagePullPolicy: Always
           ports:
             - containerPort: 8002
