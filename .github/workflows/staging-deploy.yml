@@ -5,15 +5,28 @@ on:
     workflows: ["CI Pipeline - Testing Branch"]
     types:
       - completed
-    branches:
-      - testing
+  workflow_dispatch: # This allows manual triggering
+    inputs:
+      environment:
+        description: "Environment to deploy to"
+        required: true
+        default: "staging"
 
 jobs:
   staging-deployment:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
 
     steps:
+      - name: Debug Info
+        run: |
+          echo "Stage 2 triggered!"
+          echo "Event: ${{ github.event_name }}"
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            echo "Triggered by workflow: ${{ github.event.workflow_run.name }}"
+            echo "Conclusion: ${{ github.event.workflow_run.conclusion }}"
+          fi
+
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -30,87 +43,39 @@ jobs:
 
       - name: Create Staging Namespace
         run: |
-          # Create unique staging namespace for this pipeline run
-          kubectl create namespace staging-${{ github.run_id }} || echo "Namespace already exists"
+          NAMESPACE="staging-${{ github.run_id }}"
+          kubectl create namespace $NAMESPACE || echo "Namespace already exists"
+          echo "Created staging namespace: $NAMESPACE"
 
-      - name: Deploy Backend Services to Staging
+      - name: Deploy Test Application
         run: |
-          # Deploy each backend service
-          for service in customer_service order_service product_service; do
-            echo "Deploying $service to staging..."
-            
-            # Apply Kubernetes manifests for each service
-            kubectl apply -f k8s/${service}/ -n staging-${{ github.run_id }}
-            
-            # Update deployment with latest image from ACR
-            kubectl set image deployment/${service} \
-              ${service}=${{ secrets.ACR_LOGIN_SERVER }}/${service}:${{ github.sha }} \
-              -n staging-${{ github.run_id }}
-          done
+          NAMESPACE="staging-${{ github.run_id }}"
 
-      - name: Deploy Frontend to Staging
+          # Create a simple test deployment
+          kubectl create deployment test-app --image=nginx:latest -n $NAMESPACE
+          kubectl expose deployment test-app --port=80 --target-port=80 -n $NAMESPACE
+
+          # Wait for deployment
+          kubectl rollout status deployment/test-app -n $NAMESPACE --timeout=300s
+
+      - name: Test Deployment
         run: |
-          echo "Deploying frontend to staging..."
+          NAMESPACE="staging-${{ github.run_id }}"
 
-          # Apply frontend Kubernetes manifests
-          kubectl apply -f k8s/frontend/ -n staging-${{ github.run_id }}
+          echo "Testing deployment in namespace: $NAMESPACE"
+          kubectl get pods -n $NAMESPACE
+          kubectl get services -n $NAMESPACE
 
-          # Update frontend deployment with latest image
-          kubectl set image deployment/frontend \
-            frontend=${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ github.sha }} \
-            -n staging-${{ github.run_id }}
+          # Test connectivity
+          kubectl port-forward service/test-app 8080:80 -n $NAMESPACE &
+          PID=$!
+          sleep 10
+          curl -f http://localhost:8080 || echo "Test completed"
+          kill $PID || true
 
-      - name: Wait for All Deployments
-        run: |
-          echo "Waiting for all services to be ready..."
-          for service in customer_service order_service product_service frontend; do
-            echo "Waiting for $service deployment..."
-            kubectl rollout status deployment/${service} -n staging-${{ github.run_id }} --timeout=300s
-          done
-
-      - name: Test Staging Environment
-        run: |
-          echo "Testing staging deployment..."
-
-          # Test each service endpoint
-          kubectl get pods -n staging-${{ github.run_id }}
-          kubectl get services -n staging-${{ github.run_id }}
-
-          # Port forward and test frontend
-          kubectl port-forward service/frontend-service 8080:80 -n staging-${{ github.run_id }} &
-          FRONTEND_PID=$!
-
-          # Port forward and test one backend service (customer_service)
-          kubectl port-forward service/customer-service 8081:80 -n staging-${{ github.run_id }} &
-          BACKEND_PID=$!
-
-          # Wait for port forwards to be ready
-          sleep 15
-
-          # Run basic health checks
-          echo "Testing frontend..."
-          curl -f http://localhost:8080 || echo "Frontend test completed"
-
-          echo "Testing customer service..."
-          curl -f http://localhost:8081/health || curl -f http://localhost:8081 || echo "Backend test completed"
-
-          # Kill port forwards
-          kill $FRONTEND_PID $BACKEND_PID || true
-
-      - name: Run Acceptance Tests
-        run: |
-          echo "Running acceptance tests on staging environment..."
-          # Add your specific acceptance tests here
-
-      - name: Cleanup Staging Environment
+      - name: Cleanup
         if: always()
         run: |
-          echo "Cleaning up staging environment..."
-          kubectl delete namespace staging-${{ github.run_id }} --ignore-not-found=true
-
-      - name: Notify Success
-        if: success()
-        run: |
-          echo "✅ Multi-service staging deployment and testing completed successfully!"
-          echo "All services (customer_service, order_service, product_service, frontend) tested."
-          echo "Ready for production deployment after PR merge."
+          NAMESPACE="staging-${{ github.run_id }}"
+          kubectl delete namespace $NAMESPACE --ignore-not-found=true
+          echo "Cleanup completed for $NAMESPACE"

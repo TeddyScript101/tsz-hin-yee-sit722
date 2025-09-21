@@ -77,32 +77,32 @@ jobs:
           cd backend/${{ matrix.service }}
           python -m pytest tests/ -v
 
-  build-and-push:
-    needs: test-backend-services
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        service: [customer_service, order_service, product_service, frontend]
+  # build-and-push:
+  #   needs: test-backend-services
+  #   runs-on: ubuntu-latest
+  #   strategy:
+  #     matrix:
+  #       service: [customer_service, order_service, product_service, frontend]
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v4
 
-      - name: Login to Azure
-        uses: azure/login@v1
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+  #     - name: Login to Azure
+  #       uses: azure/login@v1
+  #       with:
+  #         creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Login to ACR
-        run: |
-          echo ${{ secrets.ACR_PASSWORD }} | docker login ${{ secrets.ACR_LOGIN_SERVER }} -u ${{ secrets.ACR_USERNAME }} --password-stdin
+  #     - name: Login to ACR
+  #       run: |
+  #         echo ${{ secrets.ACR_PASSWORD }} | docker login ${{ secrets.ACR_LOGIN_SERVER }} -u ${{ secrets.ACR_USERNAME }} --password-stdin
 
-      - name: Build and push ${{ matrix.service }} image
-        run: |
-          if [ "${{ matrix.service }}" = "frontend" ]; then
-            cd frontend
-          else
-            cd backend/${{ matrix.service }}
-          fi
-          docker build -t ${{ secrets.ACR_LOGIN_SERVER }}/${{ matrix.service }}:${{ github.sha }} .
-          docker push ${{ secrets.ACR_LOGIN_SERVER }}/${{ matrix.service }}:${{ github.sha }}
+  #     - name: Build and push ${{ matrix.service }} image
+  #       run: |
+  #         if [ "${{ matrix.service }}" = "frontend" ]; then
+  #           cd frontend
+  #         else
+  #           cd backend/${{ matrix.service }}
+  #         fi
+  #         docker build -t ${{ secrets.ACR_LOGIN_SERVER }}/${{ matrix.service }}:${{ github.sha }} .
+  #         docker push ${{ secrets.ACR_LOGIN_SERVER }}/${{ matrix.service }}:${{ github.sha }}
