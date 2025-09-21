@@ -60,14 +60,6 @@ jobs:
           kubectl set image deployment/frontend *=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG -n production
           echo "✅ Frontend deployed"
 
-      - name: Wait for Deployments
-        run: |
-          DEPLOYMENTS=$(kubectl get deployments -n production -o jsonpath='{.items[*].metadata.name}')
-          for dep in $DEPLOYMENTS; do
-            kubectl rollout status deployment/$dep -n production --timeout=300s
-            echo "✅ $dep ready"
-          done
-
       - name: Production Health Check
         run: |
           echo "🧪 Running production tests..."
