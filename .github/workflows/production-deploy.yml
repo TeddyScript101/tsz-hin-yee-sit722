@@ -56,10 +56,15 @@ jobs:
 
             kubectl label deployment $K8S_NAME app=$K8S_NAME -n $PROD_NAMESPACE --overwrite
 
-            # Use explicit container name for safety
-            kubectl set image deployment/$K8S_NAME $K8S_NAME=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG -n $PROD_NAMESPACE --record
+            # Update image safely, fallback if container name mismatch
+            CONTAINER_NAME=$(kubectl get deployment $K8S_NAME -n $PROD_NAMESPACE -o jsonpath='{.spec.template.spec.containers[0].name}')
+            if [ -n "$CONTAINER_NAME" ]; then
+              kubectl set image deployment/$K8S_NAME $CONTAINER_NAME=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG -n $PROD_NAMESPACE
+              echo "✅ $service image updated"
+            else
+              echo "⚠️ No container found in $K8S_NAME, skipping image update"
+            fi
 
-            echo "✅ $service deployed and labeled"
           done
 
       - name: Deploy Frontend
@@ -72,8 +77,14 @@ jobs:
             kubectl expose deployment frontend --port=80 --target-port=80 --name=frontend-service -n $PROD_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
           fi
           kubectl label deployment frontend app=frontend -n $PROD_NAMESPACE --overwrite
-          kubectl set image deployment/frontend frontend=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG -n $PROD_NAMESPACE --record
-          echo "✅ Frontend deployed and labeled"
+
+          FRONTEND_CONTAINER=$(kubectl get deployment frontend -n $PROD_NAMESPACE -o jsonpath='{.spec.template.spec.containers[0].name}')
+          if [ -n "$FRONTEND_CONTAINER" ]; then
+            kubectl set image deployment/frontend $FRONTEND_CONTAINER=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG -n $PROD_NAMESPACE
+            echo "✅ Frontend image updated"
+          else
+            echo "⚠️ Frontend container not found, skipping image update"
+          fi
 
       - name: Wait for Deployments
         run: |
