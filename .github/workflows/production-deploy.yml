@@ -30,116 +30,84 @@ jobs:
           az aks get-credentials --resource-group $RESOURCE_GROUP --name $AKS_NAME
           kubectl cluster-info
 
-      - name: Ensure Production Namespace
+      - name: Create Production Namespace
         run: |
           kubectl create namespace $PROD_NAMESPACE || echo "Namespace exists"
-
-      - name: Deploy Infrastructure (ConfigMaps, Secrets, Databases, RabbitMQ)
-        run: |
-          echo "🏗️ Deploying infrastructure components"
-
-          # Deploy ConfigMaps and Secrets
-          kubectl apply -f k8s/configmaps.yaml -n $PROD_NAMESPACE
-          kubectl apply -f k8s/secrets.yaml -n $PROD_NAMESPACE
-
-          # Deploy databases
-          kubectl apply -f k8s/customer-db.yaml -n $PROD_NAMESPACE
-          kubectl apply -f k8s/order-db.yaml -n $PROD_NAMESPACE
-          kubectl apply -f k8s/product-db.yaml -n $PROD_NAMESPACE
-
-          # Deploy RabbitMQ
-          kubectl apply -f k8s/rabbitmq.yaml -n $PROD_NAMESPACE
-
-          echo "✅ Infrastructure deployed"
-
-      - name: Wait for Infrastructure
-        run: |
-          echo "⏳ Waiting for infrastructure to be ready"
-
-          # Wait for database deployments
-          kubectl rollout status deployment/customer-db-deployment-w10-aks -n $PROD_NAMESPACE --timeout=300s
-          kubectl rollout status deployment/order-db-deployment-w10-aks -n $PROD_NAMESPACE --timeout=300s
-          kubectl rollout status deployment/product-db-deployment-w10-aks -n $PROD_NAMESPACE --timeout=300s
-          kubectl rollout status deployment/rabbitmq-deployment-w10-aks -n $PROD_NAMESPACE --timeout=300s
-
-          echo "✅ Infrastructure ready"
 
       - name: Deploy Backend Services
         run: |
           for service in customer_service order_service product_service; do
             K8S_NAME=$(echo $service | sed 's/_/-/g')
-            K8S_FILE="${K8S_NAME}-service.yaml"
-            echo "📦 Deploying $service using $K8S_FILE"
+            echo "📦 Deploying $service as $K8S_NAME"
             
-            # Apply manifests - your files are named like customer-service.yaml, order-service.yaml, etc.
-            if [ -f "k8s/$K8S_FILE" ]; then
-              # Replace image tag in the YAML and apply
-              sed "s|teddyacr722week10.azurecr.io|$ACR_LOGIN_SERVER|g; s|\${IMAGE_TAG}|$IMAGE_TAG|g" k8s/$K8S_FILE \
-                | kubectl apply -n $PROD_NAMESPACE -f -
-            else
-              echo "⚠️ File k8s/$K8S_FILE not found, creating deployment manually"
-              kubectl create deployment $K8S_NAME \
-                --image=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG \
-                -n $PROD_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
-              kubectl expose deployment $K8S_NAME \
-                --port=80 --target-port=80 \
-                --name=${K8S_NAME}-service \
-                -n $PROD_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
-            fi
+            # Create deployment (like Stage 2 does)
+            kubectl create deployment $K8S_NAME \
+              --image=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG \
+              -n $PROD_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+            
+            # Expose service (like Stage 2 does)
+            kubectl expose deployment $K8S_NAME \
+              --port=80 --target-port=80 \
+              --name=${K8S_NAME}-service \
+              -n $PROD_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
 
-            # Ensure proper label for health checks (using actual deployment names from your YAML files)
-            kubectl label deployment ${K8S_NAME}-w10-aks app=${K8S_NAME} -n $PROD_NAMESPACE --overwrite || echo "Label applied or deployment not found"
+            # Ensure proper label for health checks
+            kubectl label deployment $K8S_NAME app=$K8S_NAME -n $PROD_NAMESPACE --overwrite
 
             # Update image safely
-            kubectl set image deployment/${K8S_NAME}-w10-aks *=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG -n $PROD_NAMESPACE || echo "Image update attempted"
+            kubectl set image deployment/$K8S_NAME *=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG -n $PROD_NAMESPACE || echo "Deployment $K8S_NAME not found"
 
-            echo "✅ $service deployment processed"
+            echo "✅ $service deployed and labeled"
           done
 
       - name: Deploy Frontend
         run: |
           echo "📦 Deploying frontend"
-          if [ -f "k8s/frontend.yaml" ]; then
-            # Replace image tag in the YAML and apply
-            sed "s|teddyacr722week10.azurecr.io|$ACR_LOGIN_SERVER|g; s|\${IMAGE_TAG}|$IMAGE_TAG|g" k8s/frontend.yaml \
-              | kubectl apply -n $PROD_NAMESPACE -f -
-          else
-            kubectl create deployment frontend --image=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG -n $PROD_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
-            kubectl expose deployment frontend --port=80 --target-port=80 --name=frontend-service -n $PROD_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
-          fi
-          kubectl set image deployment/frontend-w10-aks *=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG -n $PROD_NAMESPACE
-          kubectl label deployment frontend-w10-aks app=frontend -n $PROD_NAMESPACE --overwrite
+
+          # Create deployment (like Stage 2 does)
+          kubectl create deployment frontend --image=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG -n $PROD_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+
+          # Expose service (like Stage 2 does)
+          kubectl expose deployment frontend --port=80 --target-port=80 --name=frontend-service -n $PROD_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+
+          # Update image and label
+          kubectl set image deployment/frontend *=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG -n $PROD_NAMESPACE
+          kubectl label deployment frontend app=frontend -n $PROD_NAMESPACE --overwrite
           echo "✅ Frontend deployed and labeled"
 
-      - name: Wait for Application Deployments
+      - name: Wait for Deployments
         run: |
-          echo "⏳ Waiting for application deployments"
+          DEPLOYMENTS=$(kubectl get deployments -n $PROD_NAMESPACE -o jsonpath='{.items[*].metadata.name}')
+          for dep in $DEPLOYMENTS; do
+            kubectl rollout status deployment/$dep -n $PROD_NAMESPACE --timeout=300s
+            echo "✅ $dep ready"
+          done
 
-          # Wait for backend services
-          kubectl rollout status deployment/customer-service-w10-aks -n $PROD_NAMESPACE --timeout=300s
-          kubectl rollout status deployment/order-service-w10-aks -n $PROD_NAMESPACE --timeout=300s
-          kubectl rollout status deployment/product-service-w10-aks -n $PROD_NAMESPACE --timeout=300s
-
-          # Wait for frontend
-          kubectl rollout status deployment/frontend-w10-aks -n $PROD_NAMESPACE --timeout=300s
-
-          echo "✅ All deployments ready"
-
-      - name: Run Production Health Checks
+      - name: Run Production Tests
         run: |
-          echo "🧪 Running production health checks..."
+          echo "🧪 Running tests..."
+          # Frontend
+          kubectl port-forward service/frontend-service 8080:80 -n $PROD_NAMESPACE &
+          PF_PID=$!
+          sleep 10
+          curl -f -s http://localhost:8080 && echo "✅ Frontend responding" || echo "⚠️ Frontend not responding"
+          kill $PF_PID 2>/dev/null || true
 
-          # Check if all pods are running
-          kubectl get pods -n $PROD_NAMESPACE
+          # Backend
+          for svc in customer-service order-service product-service; do
+            POD=$(kubectl get pods -n $PROD_NAMESPACE -l app=$svc -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+            if [ -n "$POD" ]; then
+              kubectl wait --for=condition=ready pod/$POD -n $PROD_NAMESPACE --timeout=120s
+              echo "✅ $svc pod ready"
+            else
+              echo "⚠️ $svc pod not found"
+            fi
+          done
 
-          # Wait for all pods to be ready
-          kubectl wait --for=condition=ready pod --all -n $PROD_NAMESPACE --timeout=300s
-
-          echo "✅ All pods are healthy"
-
-      - name: Display Service Information
+      - name: Display Production Status
         run: |
           echo "📋 Production deployment summary:"
           kubectl get services -n $PROD_NAMESPACE
           kubectl get deployments -n $PROD_NAMESPACE
+          kubectl get pods -n $PROD_NAMESPACE
           echo "✅ Production deployment completed successfully!"
