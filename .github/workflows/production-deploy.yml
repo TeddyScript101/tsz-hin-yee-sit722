@@ -53,6 +53,29 @@ jobs:
             echo "✅ $service deployed and labeled"
           done
 
+      - name: Get Backend IPs
+        run: |
+          PRODUCT_API_IP=$(kubectl get svc product-service -n production -o jsonpath='{.spec.clusterIP}')
+          ORDER_API_IP=$(kubectl get svc order-service -n production -o jsonpath='{.spec.clusterIP}')
+          CUSTOMER_API_IP=$(kubectl get svc customer-service -n production -o jsonpath='{.spec.clusterIP}')
+
+          echo "PRODUCT_API_IP=$PRODUCT_API_IP" >> $GITHUB_ENV
+          echo "ORDER_API_IP=$ORDER_API_IP" >> $GITHUB_ENV
+          echo "CUSTOMER_API_IP=$CUSTOMER_API_IP" >> $GITHUB_ENV
+
+          echo "✅ Captured backend IPs"
+
+      - name: Inject Backend IPs into Frontend main.js
+        run: |
+          echo "Injecting backend IPs into frontend/main.js"
+          sed -i "s|_PRODUCT_API_URL_|http://$PRODUCT_API_IP:80|g" frontend/main.js
+          sed -i "s|_ORDER_API_URL_|http://$ORDER_API_IP:80|g" frontend/main.js
+          sed -i "s|_CUSTOMER_API_URL_|http://$CUSTOMER_API_IP:80|g" frontend/main.js
+
+          echo "--- Modified main.js (first 30 lines) ---"
+          head -30 frontend/main.js
+          echo "---------------------------------"
+
       - name: Deploy Frontend
         run: |
           echo "📦 Deploying frontend"
