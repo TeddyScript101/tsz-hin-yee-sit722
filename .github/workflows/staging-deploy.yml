@@ -153,10 +153,10 @@ jobs:
         run: |
           FRONTEND_FILE=frontend/main.js
 
-          # For staging, use ClusterIP
-          PRODUCT_API_IP="http://$(kubectl get svc product-service -n $STAGING_NAMESPACE -o jsonpath='{.spec.clusterIP}'):8000"
-          ORDER_API_IP="http://$(kubectl get svc order-service -n $STAGING_NAMESPACE -o jsonpath='{.spec.clusterIP}'):8000"
-          CUSTOMER_API_IP="http://$(kubectl get svc customer-service -n $STAGING_NAMESPACE -o jsonpath='{.spec.clusterIP}'):8000"
+          # For staging, use ClusterIP with correct service names
+          PRODUCT_API_IP="http://$(kubectl get svc product-service-w10-aks -n $STAGING_NAMESPACE -o jsonpath='{.spec.clusterIP}'):8000"
+          ORDER_API_IP="http://$(kubectl get svc order-service-w10-aks -n $STAGING_NAMESPACE -o jsonpath='{.spec.clusterIP}'):8000"
+          CUSTOMER_API_IP="http://$(kubectl get svc customer-service-w10-aks -n $STAGING_NAMESPACE -o jsonpath='{.spec.clusterIP}'):8000"
 
           echo "Injecting URLs into frontend:"
           echo "Product API: $PRODUCT_API_IP"
@@ -236,9 +236,9 @@ jobs:
           kubectl get deployments -n $STAGING_NAMESPACE
           kubectl get pods -n $STAGING_NAMESPACE
 
-      - name: Cleanup Staging Environment
-        if: always()
-        run: |
-          echo "🧹 Cleaning up staging environment..."
-          kubectl delete namespace $STAGING_NAMESPACE --ignore-not-found=true --timeout=60s
-          echo "✅ Staging cleaned up"
+  #    - name: Cleanup Staging Environment
+  #     if: always()
+  #    run: |
+  #     echo "🧹 Cleaning up staging environment..."
+  #    kubectl delete namespace $STAGING_NAMESPACE --ignore-not-found=true --timeout=60s
+  #   echo "✅ Staging cleaned up"
