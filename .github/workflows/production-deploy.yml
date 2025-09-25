@@ -189,6 +189,6 @@ jobs:
 
           check_health "Product Service" $PRODUCT_API_IP 8000
           check_health "Order Service" $ORDER_API_IP 8001
-          check_health "Customer Service" $CUSTOMER_API_IP 8002
+          check_health "Customer Service" $CUSTOMER_API_IP 8000
           check_health "Frontend" $FRONTEND_IP 80
           check_health "RabbitMQ" localhost 15672
