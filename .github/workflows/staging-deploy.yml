@@ -110,20 +110,15 @@ jobs:
           kubectl rollout status deployment/customer-service-w10-aks -n $STAGING_NAMESPACE --timeout=300s
 
       # -------------------------------
-      # Inject Backend IPs for Staging Health Check
+      # Deploy Frontend
       # -------------------------------
       - name: Inject Backend IPs for Local Testing
         run: |
           FRONTEND_FILE=frontend/main.js
+          sed -i "s|_PRODUCT_API_URL_|http://localhost:18000|g" "$FRONTEND_FILE"
+          sed -i "s|_ORDER_API_URL_|http://localhost:18001|g" "$FRONTEND_FILE"
+          sed -i "s|_CUSTOMER_API_URL_|http://localhost:18002|g" "$FRONTEND_FILE"
 
-          # Use localhost ports for testing with port-forward
-          sed -i "s|_PRODUCT_API_URL_|http://localhost:8000|g" "$FRONTEND_FILE"
-          sed -i "s|_ORDER_API_URL_|http://localhost:8001|g" "$FRONTEND_FILE"
-          sed -i "s|_CUSTOMER_API_URL_|http://localhost:8002|g" "$FRONTEND_FILE"
-
-      # -------------------------------
-      # Build and Push Frontend Image
-      # -------------------------------
       - name: Login to ACR
         run: |
           echo ${{ secrets.ACR_PASSWORD }} | docker login -u ${{ secrets.ACR_USERNAME }} --password-stdin ${{ secrets.ACR_LOGIN_SERVER }}
@@ -133,9 +128,6 @@ jobs:
           docker build -t ${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }} frontend
           docker push ${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }}
 
-      # -------------------------------
-      # Update Frontend Deployment Image
-      # -------------------------------
       - name: Update Frontend Deployment
         run: |
           kubectl apply -f k8s/frontend.yaml -n $STAGING_NAMESPACE
@@ -145,62 +137,81 @@ jobs:
           kubectl rollout status deployment/frontend-w10-aks -n $STAGING_NAMESPACE --timeout=300s
 
       # -------------------------------
-      # Manual Health Check
+      # Wait for Services and Port Forward
       # -------------------------------
-      - name: Run Staging Health Checks
+      - name: Wait for Services and Setup Port Forwarding
         run: |
-          echo "🧪 Running health checks for backend services..."
+          NAMESPACE=$STAGING_NAMESPACE
+          SERVICES=("product-service" "order-service" "customer-service" "frontend")
+          LOCAL_PORTS=(18000 18001 18002 18003)
 
-          # Port-forward backend services and frontend
-          kubectl port-forward svc/product-service-w10-aks -n $STAGING_NAMESPACE 8000:8000 &
-          PF_PRODUCT=$!
-          kubectl port-forward svc/order-service-w10-aks -n $STAGING_NAMESPACE 8001:8001 &
-          PF_ORDER=$!
-          kubectl port-forward svc/customer-service-w10-aks -n $STAGING_NAMESPACE 8002:8002 &
-          PF_CUSTOMER=$!
-          kubectl port-forward svc/frontend-w10-aks -n $STAGING_NAMESPACE 8080:80 &
-          PF_FRONTEND=$!
-
-          sleep 5  # Give port-forwards time to start
-
-          SERVICES=(
-            "product-service:localhost:8000"
-            "order-service:localhost:8001"
-            "customer-service:localhost:8002"
-            "frontend:localhost:8080"
-          )
-
+          # Wait for pods to be ready
           for svc in "${SERVICES[@]}"; do
-            NAME="${svc%%:*}"
-            HOST="${svc#*:}"
-            PORT="${HOST#*:}"
-            HOST="${HOST%%:*}"
-
-            URL="http://$HOST:$PORT"
-            echo "Checking $NAME at $URL"
-            if curl -f -s --max-time 10 $URL >/dev/null; then
-              echo "✅ $NAME is healthy"
-            else
-              echo "❌ $NAME is NOT responding"
-            fi
+            echo "🔍 Waiting for pods of $svc to be ready..."
+            kubectl wait --for=condition=Ready pod -l app=$svc-w10-aks -n $NAMESPACE --timeout=180s
           done
 
-          # Kill all port-forward processes
-          kill $PF_PRODUCT $PF_ORDER $PF_CUSTOMER $PF_FRONTEND 2>/dev/null || true
+          # Setup port forwards
+          for i in ${!SERVICES[@]}; do
+            svc=${SERVICES[$i]}
+            local_port=${LOCAL_PORTS[$i]}
+            target_port=$(kubectl get svc $svc-w10-aks -n $NAMESPACE -o jsonpath='{.spec.ports[0].targetPort}')
+            echo "🚀 Port-forward $svc: localhost:$local_port -> $target_port"
+            kubectl port-forward svc/$svc-w10-aks $local_port:$target_port -n $NAMESPACE &
+          done
+          echo "⏳ Waiting 10s for port forwards to stabilize..."
+          sleep 10
 
       # -------------------------------
-      # Display Staging Status
+      # Test Service Connectivity
       # -------------------------------
-      - name: Display Staging Status
+      - name: Test Service Connectivity
         run: |
-          kubectl get services -n $STAGING_NAMESPACE
-          kubectl get deployments -n $STAGING_NAMESPACE
-          kubectl get pods -n $STAGING_NAMESPACE
+          test_endpoint() {
+            local name=$1
+            local url=$2
+            for i in {1..10}; do
+              if curl -f -s --max-time 5 "$url" >/dev/null 2>&1; then
+                echo "✅ $name is responding"
+                return 0
+              else
+                echo "⏳ Attempt $i/10: $name not ready, retrying..."
+                sleep 2
+              fi
+            done
+            echo "❌ $name failed to respond after 10 attempts"
+            return 1
+          }
+
+          test_endpoint "Product Service" "http://localhost:18000/health"
+          test_endpoint "Order Service" "http://localhost:18001/health"
+          test_endpoint "Customer Service" "http://localhost:18002/health"
+          test_endpoint "Frontend" "http://localhost:18003/"
 
       # -------------------------------
-      # Cleanup Staging Environment
+      # Export Service URLs for Tests
       # -------------------------------
-      - name: Cleanup Staging Environment
+      - name: Export Service URLs and Run Tests
+        run: |
+          export PRODUCT_API_IP="http://localhost:18000"
+          export ORDER_API_IP="http://localhost:18001"
+          export CUSTOMER_API_IP="http://localhost:18002"
+          export FRONTEND_URL="http://localhost:18003"
+
+          echo "🔗 Final service URLs:"
+          echo "Product API: $PRODUCT_API_IP"
+          echo "Order API: $ORDER_API_IP"
+          echo "Customer API: $CUSTOMER_API_IP"
+          echo "Frontend: $FRONTEND_URL"
+
+          cd util
+          npm test --testTimeout=30000
+
+      # -------------------------------
+      # Cleanup Port Forwards
+      # -------------------------------
+      - name: Cleanup Port Forwards
         if: always()
         run: |
-          kubectl delete namespace $STAGING_NAMESPACE --ignore-not-found=true --timeout=60s
+          echo "🧹 Cleaning up port forwards..."
+          pkill -f "kubectl port-forward" || true
