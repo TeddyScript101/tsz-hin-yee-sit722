@@ -48,7 +48,7 @@ metadata:
   labels:
     app: customer-service
   annotations:
-    service.beta.kubernetes.io/azure-load-balancer-resource-group: deakinuni
+    service.beta.kubernetes.io/azure-load-balancer-resource-group: teddysit722Week10
 spec:
   selector:
     app: customer-service
@@ -57,4 +57,3 @@ spec:
       port: 8002
       targetPort: 8000
   type: LoadBalancer
-  loadBalancerIP: 4.197.88.65

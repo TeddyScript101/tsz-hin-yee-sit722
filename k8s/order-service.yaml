@@ -73,7 +73,7 @@ metadata:
   labels:
     app: order-service
   annotations:
-    service.beta.kubernetes.io/azure-load-balancer-resource-group: deakinuni
+    service.beta.kubernetes.io/azure-load-balancer-resource-group: teddysit722Week10
 
 spec:
   selector:
@@ -83,4 +83,3 @@ spec:
       port: 8001
       targetPort: 8000
   type: LoadBalancer
-  loadBalancerIP: 4.197.193.135
