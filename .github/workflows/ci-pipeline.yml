@@ -82,7 +82,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        service: [customer_service, order_service, product_service, frontend]
+        service: [customer_service, order_service, product_service] # Removed frontend from the matrix
 
     steps:
       - name: Checkout code
@@ -99,11 +99,7 @@ jobs:
 
       - name: Build and push ${{ matrix.service }} image
         run: |
-          if [ "${{ matrix.service }}" = "frontend" ]; then
-            cd frontend
-          else
-            cd backend/${{ matrix.service }}
-          fi
+          cd backend/${{ matrix.service }}  # Removed frontend condition since we only handle backend services now
 
           # Build and tag with commit SHA
           docker build -t ${{ secrets.ACR_LOGIN_SERVER }}/${{ matrix.service }}:${{ github.sha }} .

@@ -81,19 +81,19 @@ jobs:
       - name: Deploy Product DB
         run: |
           kubectl apply -f k8s/product-db.yaml -n $STAGING_NAMESPACE
-          kubectl rollout status deployment/product-db-deployment -n $STAGING_NAMESPACE --timeout=300s
+          kubectl rollout status deployment/product-db-deployment-w10-aks -n $STAGING_NAMESPACE --timeout=300s
           kubectl wait --for=condition=Ready pod -l app=product-db -n $STAGING_NAMESPACE --timeout=180s
 
       - name: Deploy Order DB
         run: |
           kubectl apply -f k8s/order-db.yaml -n $STAGING_NAMESPACE
-          kubectl rollout status deployment/order-db-deployment -n $STAGING_NAMESPACE --timeout=300s
+          kubectl rollout status deployment/order-db-deployment-w10-aks -n $STAGING_NAMESPACE --timeout=300s
           kubectl wait --for=condition=Ready pod -l app=order-db -n $STAGING_NAMESPACE --timeout=180s
 
       - name: Deploy Customer DB
         run: |
           kubectl apply -f k8s/customer-db.yaml -n $STAGING_NAMESPACE
-          kubectl rollout status deployment/customer-db-deployment -n $STAGING_NAMESPACE --timeout=300s
+          kubectl rollout status deployment/customer-db-deployment-w10-aks -n $STAGING_NAMESPACE --timeout=300s
           kubectl wait --for=condition=Ready pod -l app=customer-db -n $STAGING_NAMESPACE --timeout=180s
 
       # -------------------------------
@@ -102,19 +102,19 @@ jobs:
       - name: Deploy Product Service
         run: |
           kubectl apply -f k8s/product-service.yaml -n $STAGING_NAMESPACE
-          kubectl rollout status deployment/product-service -n $STAGING_NAMESPACE --timeout=300s
+          kubectl rollout status deployment/product-service-w10-aks -n $STAGING_NAMESPACE --timeout=300s
           kubectl wait --for=condition=Ready pod -l app=product-service -n $STAGING_NAMESPACE --timeout=180s
 
       - name: Deploy Order Service
         run: |
           kubectl apply -f k8s/order-service.yaml -n $STAGING_NAMESPACE
-          kubectl rollout status deployment/order-service -n $STAGING_NAMESPACE --timeout=300s
+          kubectl rollout status deployment/order-service-w10-aks -n $STAGING_NAMESPACE --timeout=300s
           kubectl wait --for=condition=Ready pod -l app=order-service -n $STAGING_NAMESPACE --timeout=180s
 
       - name: Deploy Customer Service
         run: |
           kubectl apply -f k8s/customer-service.yaml -n $STAGING_NAMESPACE
-          kubectl rollout status deployment/customer-service -n $STAGING_NAMESPACE --timeout=300s
+          kubectl rollout status deployment/customer-service-w10-aks -n $STAGING_NAMESPACE --timeout=300s
           kubectl wait --for=condition=Ready pod -l app=customer-service -n $STAGING_NAMESPACE --timeout=180s
 
       # -------------------------------
@@ -155,7 +155,7 @@ jobs:
       - name: Deploy Frontend
         run: |
           kubectl apply -f k8s/frontend.yaml -n $STAGING_NAMESPACE
-          kubectl rollout status deployment/frontend -n $STAGING_NAMESPACE --timeout=300s
+          kubectl rollout status deployment/frontend-w10-aks -n $STAGING_NAMESPACE --timeout=300s
           kubectl wait --for=condition=Ready pod -l app=frontend -n $STAGING_NAMESPACE --timeout=180s
 
       - name: Log Service Status
