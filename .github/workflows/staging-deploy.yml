@@ -58,6 +58,100 @@ jobs:
           # Update frontend image
           sed -i 's|image: teddysit722hd.azurecr.io/frontend:latest|image: ${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }}|g' k8s/frontend.yaml
 
+      # -------------------------------
+      # Update service types for staging (ClusterIP instead of LoadBalancer)
+      # -------------------------------
+      - name: Update Service Types for Staging
+        run: |
+          # Change LoadBalancer to ClusterIP for staging
+          sed -i 's/type: LoadBalancer/type: ClusterIP/g' k8s/product-service.yaml
+          sed -i 's/type: LoadBalancer/type: ClusterIP/g' k8s/order-service.yaml  
+          sed -i 's/type: LoadBalancer/type: ClusterIP/g' k8s/customer-service.yaml
+          sed -i 's/type: LoadBalancer/type: ClusterIP/g' k8s/frontend.yaml
+
+      - name: Apply ConfigMaps
+        run: kubectl apply -f k8s/configmaps.yaml -n $STAGING_NAMESPACE
+
+      - name: Apply Secrets
+        run: kubectl apply -f k8s/secrets.yaml -n $STAGING_NAMESPACE
+
+      # -------------------------------
+      # Deploy Databases
+      # -------------------------------
+      - name: Deploy Product DB
+        run: |
+          kubectl apply -f k8s/product-db.yaml -n $STAGING_NAMESPACE
+          kubectl rollout status deployment/product-db-deployment -n $STAGING_NAMESPACE --timeout=300s
+          kubectl wait --for=condition=Ready pod -l app=product-db -n $STAGING_NAMESPACE --timeout=180s
+
+      - name: Deploy Order DB
+        run: |
+          kubectl apply -f k8s/order-db.yaml -n $STAGING_NAMESPACE
+          kubectl rollout status deployment/order-db-deployment -n $STAGING_NAMESPACE --timeout=300s
+          kubectl wait --for=condition=Ready pod -l app=order-db -n $STAGING_NAMESPACE --timeout=180s
+
+      - name: Deploy Customer DB
+        run: |
+          kubectl apply -f k8s/customer-db.yaml -n $STAGING_NAMESPACE
+          kubectl rollout status deployment/customer-db-deployment -n $STAGING_NAMESPACE --timeout=300s
+          kubectl wait --for=condition=Ready pod -l app=customer-db -n $STAGING_NAMESPACE --timeout=180s
+
+      # -------------------------------
+      # Deploy Backend Services using YAML files
+      # -------------------------------
+      - name: Deploy Product Service
+        run: |
+          kubectl apply -f k8s/product-service.yaml -n $STAGING_NAMESPACE
+          kubectl rollout status deployment/product-service -n $STAGING_NAMESPACE --timeout=300s
+          kubectl wait --for=condition=Ready pod -l app=product-service -n $STAGING_NAMESPACE --timeout=180s
+
+      - name: Deploy Order Service
+        run: |
+          kubectl apply -f k8s/order-service.yaml -n $STAGING_NAMESPACE
+          kubectl rollout status deployment/order-service -n $STAGING_NAMESPACE --timeout=300s
+          kubectl wait --for=condition=Ready pod -l app=order-service -n $STAGING_NAMESPACE --timeout=180s
+
+      - name: Deploy Customer Service
+        run: |
+          kubectl apply -f k8s/customer-service.yaml -n $STAGING_NAMESPACE
+          kubectl rollout status deployment/customer-service -n $STAGING_NAMESPACE --timeout=300s
+          kubectl wait --for=condition=Ready pod -l app=customer-service -n $STAGING_NAMESPACE --timeout=180s
+
+      # -------------------------------
+      # Inject Service URLs into Frontend
+      # -------------------------------
+      - name: Inject Service URLs into Frontend
+        run: |
+          FRONTEND_FILE=frontend/main.js
+
+          # For staging, use ClusterIP
+          PRODUCT_API_IP="http://$(kubectl get svc product-service -n $STAGING_NAMESPACE -o jsonpath='{.spec.clusterIP}'):8000"
+          ORDER_API_IP="http://$(kubectl get svc order-service -n $STAGING_NAMESPACE -o jsonpath='{.spec.clusterIP}'):8000"
+          CUSTOMER_API_IP="http://$(kubectl get svc customer-service -n $STAGING_NAMESPACE -o jsonpath='{.spec.clusterIP}'):8000"
+
+          echo "Injecting URLs into frontend:"
+          echo "Product API: $PRODUCT_API_IP"
+          echo "Order API: $ORDER_API_IP"
+          echo "Customer API: $CUSTOMER_API_IP"
+
+          # Replace placeholders safely
+          sed -i "s|_PRODUCT_API_URL_|${PRODUCT_API_IP}|g" "$FRONTEND_FILE"
+          sed -i "s|_ORDER_API_URL_|${ORDER_API_IP}|g" "$FRONTEND_FILE"
+          sed -i "s|_CUSTOMER_API_URL_|${CUSTOMER_API_IP}|g" "$FRONTEND_FILE"
+
+          # Verify the replacement worked
+          echo "Verifying URL injection:"
+          grep -n "http://" "$FRONTEND_FILE" || echo "No HTTP URLs found in frontend file"
+
+      - name: Login to ACR
+        run: |
+          echo ${{ secrets.ACR_PASSWORD }} | docker login -u ${{ secrets.ACR_USERNAME }} --password-stdin ${{ secrets.ACR_LOGIN_SERVER }}
+
+      - name: Build and push frontend image
+        run: |
+          docker build -t ${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }} frontend
+          docker push ${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }}
+
       - name: Deploy Frontend
         run: |
           kubectl apply -f k8s/frontend.yaml -n $STAGING_NAMESPACE
