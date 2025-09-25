@@ -41,10 +41,18 @@ jobs:
           kubectl create namespace $STAGING_NAMESPACE || echo "Namespace exists"
           echo "STAGING_NAMESPACE=$STAGING_NAMESPACE" >> $GITHUB_ENV
 
+      - name: Create ACR Pull Secret
+        run: |
+          kubectl create secret docker-registry acr-auth \
+            --docker-server=${{ secrets.ACR_LOGIN_SERVER }} \
+            --docker-username=${{ secrets.ACR_USERNAME }} \
+            --docker-password=${{ secrets.ACR_PASSWORD }} \
+            --namespace=$STAGING_NAMESPACE
+
       # -------------------------------
       # Update image tags in YAML files
       # -------------------------------
-      - name: Update Image Tags
+      - name: Update Image Tags and Add Pull Secrets
         run: |
           # Update product service image with proper tag
           sed -i "s|image: teddyacr722week10.azurecr.io/product_service:\${IMAGE_TAG}|image: ${{ secrets.ACR_LOGIN_SERVER }}/product_service:${{ env.IMAGE_TAG }}|g" k8s/product-service.yaml
@@ -58,16 +66,19 @@ jobs:
           # Update frontend image
           sed -i "s|image: teddyacr722week10.azurecr.io/frontend:\${IMAGE_TAG}|image: ${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }}|g" k8s/frontend.yaml
 
-          # Verify the substitutions
-          echo "🔍 Checking image tags in service files:"
-          echo "Product Service:"
-          grep "image:" k8s/product-service.yaml
-          echo "Order Service:"
-          grep "image:" k8s/order-service.yaml
-          echo "Customer Service:"
-          grep "image:" k8s/customer-service.yaml
-          echo "Frontend:"
-          grep "image:" k8s/frontend.yaml
+          # Add imagePullSecrets to service deployments
+          for file in k8s/*-service.yaml; do
+            echo "Adding imagePullSecrets to $file"
+            sed -i '/spec:/a\      imagePullSecrets:\n      - name: acr-auth' "$file"
+          done
+
+          # Verify changes
+          echo "🔍 Checking configurations:"
+          for file in k8s/*-service.yaml; do
+            echo "Checking $file:"
+            grep -A 2 "imagePullSecrets:" "$file" || echo "No imagePullSecrets found"
+            grep "image:" "$file"
+          done
 
       # -------------------------------
       # Update service types for staging (ClusterIP instead of LoadBalancer)
@@ -237,9 +248,9 @@ jobs:
           kubectl get deployments -n $STAGING_NAMESPACE
           kubectl get pods -n $STAGING_NAMESPACE
 
-  #    - name: Cleanup Staging Environment
-  #     if: always()
-  #    run: |
-  #     echo "🧹 Cleaning up staging environment..."
-  #    kubectl delete namespace $STAGING_NAMESPACE --ignore-not-found=true --timeout=60s
-  #   echo "✅ Staging cleaned up"
+      - name: Cleanup Staging Environment
+        if: always()
+        run: |
+          echo "🧹 Cleaning up staging environment..."
+          kubectl delete namespace $STAGING_NAMESPACE --ignore-not-found=true --timeout=60s
+          echo "✅ Staging cleaned up"
