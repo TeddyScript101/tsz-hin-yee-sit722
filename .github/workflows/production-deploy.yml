@@ -49,11 +49,10 @@ jobs:
       - name: Apply Secrets
         run: kubectl apply -f k8s/secrets.yaml -n production
 
-      # Deploy RabbitMQ
       - name: Deploy RabbitMQ
         run: |
-          kubectl apply -f k8s/rabbitmq.yaml -n production
-          kubectl rollout status statefulset/rabbitmq -n production --timeout=300s
+          kubectl apply -f k8s/rabbitmq.yaml -n $STAGING_NAMESPACE
+          kubectl rollout status deployment/rabbitmq-deployment-w10-aks -n $STAGING_NAMESPACE --timeout=300s
 
       # Deploy databases
       - name: Deploy Product DB
