@@ -92,7 +92,7 @@ jobs:
       # --- Services Deployment (Dynamic) ---
       - name: Deploy All Services
         run: |
-          SERVICES=("product_service" "order_service" "customer_service")
+          SERVICES=("product-service" "order-service" "customer-service")
 
           for SERVICE in "${SERVICES[@]}"; do
             DEPLOYMENT_NAME="${SERVICE//_/-}-w10-aks"   # convert underscores to dashes
