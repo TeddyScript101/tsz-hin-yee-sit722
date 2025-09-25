@@ -39,7 +39,8 @@ jobs:
             --docker-server=${{ secrets.ACR_LOGIN_SERVER }} \
             --docker-username=${{ secrets.ACR_USERNAME }} \
             --docker-password=${{ secrets.ACR_PASSWORD }} \
-            --namespace=production
+            --namespace=production \
+            --dry-run=client -o yaml | kubectl apply -f -
 
       # -------------------------------
       # Update image tags in YAML files
