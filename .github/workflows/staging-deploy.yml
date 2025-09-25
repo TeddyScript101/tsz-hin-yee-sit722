@@ -50,38 +50,10 @@ jobs:
             --namespace=$STAGING_NAMESPACE
 
       # -------------------------------
-      # Update image tags in YAML files
-      # -------------------------------
-      - name: Update Image Tags
-        run: |
-          # First apply the YAML files
-          kubectl apply -f k8s/product-service.yaml -n $STAGING_NAMESPACE
-          kubectl apply -f k8s/order-service.yaml -n $STAGING_NAMESPACE
-          kubectl apply -f k8s/customer-service.yaml -n $STAGING_NAMESPACE
-
-          # Then update images using kubectl set image
-          kubectl set image deployment/product-service-w10-aks \
-            product-service-container=${{ secrets.ACR_LOGIN_SERVER }}/product_service:${{ env.IMAGE_TAG }} \
-            -n $STAGING_NAMESPACE
-
-          kubectl set image deployment/order-service-w10-aks \
-            order-service-container=${{ secrets.ACR_LOGIN_SERVER }}/order_service:${{ env.IMAGE_TAG }} \
-            -n $STAGING_NAMESPACE
-
-          kubectl set image deployment/customer-service-w10-aks \
-            customer-service-container=${{ secrets.ACR_LOGIN_SERVER }}/customer_service:${{ env.IMAGE_TAG }} \
-            -n $STAGING_NAMESPACE
-
-          # Verify the updates
-          echo "🔍 Verifying deployment images:"
-          kubectl get deployments -n $STAGING_NAMESPACE -o=jsonpath='{range .items[*]}{"\n"}{.metadata.name}{":\n"}{range .spec.template.spec.containers[*]}{.name}{" -> "}{.image}{"\n"}{end}{end}'
-
-      # -------------------------------
-      # Update service types for staging (ClusterIP instead of LoadBalancer)
+      # Update service types for staging (ClusterIP)
       # -------------------------------
       - name: Update Service Types for Staging
         run: |
-          # Change LoadBalancer to ClusterIP for staging
           sed -i 's/type: LoadBalancer/type: ClusterIP/g' k8s/product-service.yaml
           sed -i 's/type: LoadBalancer/type: ClusterIP/g' k8s/order-service.yaml  
           sed -i 's/type: LoadBalancer/type: ClusterIP/g' k8s/customer-service.yaml
@@ -112,21 +84,19 @@ jobs:
           kubectl rollout status deployment/customer-db-deployment-w10-aks -n $STAGING_NAMESPACE --timeout=300s
 
       # -------------------------------
-      # Deploy Backend Services using YAML files
+      # Deploy RabbitMQ
+      # -------------------------------
+      - name: Deploy RabbitMQ
+        run: |
+          kubectl apply -f k8s/rabbitmq.yaml -n $STAGING_NAMESPACE
+          kubectl rollout status statefulset/rabbitmq -n $STAGING_NAMESPACE --timeout=300s
+
+      # -------------------------------
+      # Deploy Backend Services
       # -------------------------------
       - name: Deploy Product Service
         run: |
           kubectl apply -f k8s/product-service.yaml -n $STAGING_NAMESPACE
-
-          # Debug pod status
-          echo "🔍 Checking pod status..."
-          kubectl get pods -n $STAGING_NAMESPACE -l app=product-service
-
-          # Get detailed pod description
-          echo "📋 Pod description:"
-          kubectl describe pods -n $STAGING_NAMESPACE -l app=product-service
-
-          # Wait for rollout
           kubectl rollout status deployment/product-service-w10-aks -n $STAGING_NAMESPACE --timeout=300s
 
       - name: Deploy Order Service
@@ -140,127 +110,96 @@ jobs:
           kubectl rollout status deployment/customer-service-w10-aks -n $STAGING_NAMESPACE --timeout=300s
 
       # -------------------------------
-      # Inject Service URLs into Frontend
+      # Get Backend Cluster IPs
       # -------------------------------
-      - name: Inject Service URLs into Frontend
+      - name: Get Backend IPs
+        run: |
+          PRODUCT_API_IP=$(kubectl get svc product-service-w10-aks -n $STAGING_NAMESPACE -o jsonpath='{.spec.clusterIP}')
+          ORDER_API_IP=$(kubectl get svc order-service-w10-aks -n $STAGING_NAMESPACE -o jsonpath='{.spec.clusterIP}')
+          CUSTOMER_API_IP=$(kubectl get svc customer-service-w10-aks -n $STAGING_NAMESPACE -o jsonpath='{.spec.clusterIP}')
+
+          echo "PRODUCT_API_IP=$PRODUCT_API_IP" >> $GITHUB_ENV
+          echo "ORDER_API_IP=$ORDER_API_IP" >> $GITHUB_ENV
+          echo "CUSTOMER_API_IP=$CUSTOMER_API_IP" >> $GITHUB_ENV
+
+      # -------------------------------
+      # Inject Backend IPs into Frontend main.js
+      # -------------------------------
+      - name: Inject Backend IPs
         run: |
           FRONTEND_FILE=frontend/main.js
+          sed -i "s|_PRODUCT_API_URL_|http://$PRODUCT_API_IP:80|g" "$FRONTEND_FILE"
+          sed -i "s|_ORDER_API_URL_|http://$ORDER_API_IP:80|g" "$FRONTEND_FILE"
+          sed -i "s|_CUSTOMER_API_URL_|http://$CUSTOMER_API_IP:80|g" "$FRONTEND_FILE"
 
-          # For staging, use ClusterIP with correct service names
-          PRODUCT_API_IP="http://$(kubectl get svc product-service-w10-aks -n $STAGING_NAMESPACE -o jsonpath='{.spec.clusterIP}'):8000"
-          ORDER_API_IP="http://$(kubectl get svc order-service-w10-aks -n $STAGING_NAMESPACE -o jsonpath='{.spec.clusterIP}'):8000"
-          CUSTOMER_API_IP="http://$(kubectl get svc customer-service-w10-aks -n $STAGING_NAMESPACE -o jsonpath='{.spec.clusterIP}'):8000"
-
-          echo "Injecting URLs into frontend:"
-          echo "Product API: $PRODUCT_API_IP"
-          echo "Order API: $ORDER_API_IP"
-          echo "Customer API: $CUSTOMER_API_IP"
-
-          # Replace placeholders safely
-          sed -i "s|_PRODUCT_API_URL_|${PRODUCT_API_IP}|g" "$FRONTEND_FILE"
-          sed -i "s|_ORDER_API_URL_|${ORDER_API_IP}|g" "$FRONTEND_FILE"
-          sed -i "s|_CUSTOMER_API_URL_|${CUSTOMER_API_IP}|g" "$FRONTEND_FILE"
-
-          # Verify the replacement worked
-          echo "Verifying URL injection:"
-          grep -n "http://" "$FRONTEND_FILE" || echo "No HTTP URLs found in frontend file"
-
+      # -------------------------------
+      # Build and Push Frontend Image
+      # -------------------------------
       - name: Login to ACR
         run: |
           echo ${{ secrets.ACR_PASSWORD }} | docker login -u ${{ secrets.ACR_USERNAME }} --password-stdin ${{ secrets.ACR_LOGIN_SERVER }}
 
-      - name: Build and push frontend image
+      - name: Build and Push Frontend Image
         run: |
           docker build -t ${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }} frontend
           docker push ${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }}
 
-      - name: Deploy Frontend
+      # -------------------------------
+      # Update Frontend Deployment Image
+      # -------------------------------
+      - name: Update Frontend Deployment
         run: |
-          # Apply frontend deployment with initial debug info
-          echo "🚀 Deploying frontend..."
           kubectl apply -f k8s/frontend.yaml -n $STAGING_NAMESPACE
+          kubectl set image deployment/frontend-w10-aks \
+            frontend-container=${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }} \
+            -n $STAGING_NAMESPACE
+          kubectl rollout status deployment/frontend-w10-aks -n $STAGING_NAMESPACE --timeout=300s
 
-          # Quick status check
-          echo "⏳ Initial pod status (5s)..."
-          sleep 5
-          kubectl get pods -n $STAGING_NAMESPACE -l app=frontend
-
-          # Check events for potential issues
-          echo "📋 Checking events..."
-          kubectl get events -n $STAGING_NAMESPACE --sort-by='.lastTimestamp' | grep frontend
-
-          # Debug pod status with shorter timeout
-          echo "🔍 Watching pod status..."
-          timeout 60s kubectl get pods -n $STAGING_NAMESPACE -l app=frontend -w || true
-
-          # Get detailed pod description if any exist
-          POD_NAME=$(kubectl get pods -n $STAGING_NAMESPACE -l app=frontend -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-          if [ ! -z "$POD_NAME" ]; then
-            echo "📝 Pod description:"
-            kubectl describe pod $POD_NAME -n $STAGING_NAMESPACE
-          fi
-
-          # Final rollout check
-          echo "⏳ Waiting for rollout completion..."
-          kubectl rollout status deployment/frontend-w10-aks -n $STAGING_NAMESPACE --timeout=60s
-
-          # Verify final state
-          echo "✅ Final deployment state:"
-          kubectl get deployment,pods -n $STAGING_NAMESPACE -l app=frontend
-
-      - name: Log Service Status
+      # -------------------------------
+      # Manual Health Check
+      # -------------------------------
+      - name: Run Staging Health Checks
         run: |
-          echo "🌐 Checking service status in namespace $STAGING_NAMESPACE..."
-          kubectl get svc -n $STAGING_NAMESPACE
+          echo "🧪 Running health checks for backend services..."
 
-          # Updated service names to match -w10-aks suffix
-          for svc in frontend-w10-aks product-service-w10-aks order-service-w10-aks customer-service-w10-aks; do
-            TYPE=$(kubectl get svc $svc -n $STAGING_NAMESPACE -o jsonpath='{.spec.type}' 2>/dev/null || echo "NotFound")
-            if [ "$TYPE" = "LoadBalancer" ]; then
-              EXTERNAL_IP=$(kubectl get svc $svc -n $STAGING_NAMESPACE -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-              echo "✅ $svc LoadBalancer IP: $EXTERNAL_IP"
-            else
-              echo "ℹ️ $svc is $TYPE"
-            fi
-          done
+          SERVICES=(
+            "product-service-w10-aks:$PRODUCT_API_IP"
+            "order-service-w10-aks:$ORDER_API_IP"
+            "customer-service-w10-aks:$CUSTOMER_API_IP"
+            "frontend-w10-aks:localhost:8080"
+          )
 
-      - name: Run Staging Tests
-        run: |
-          echo "🧪 Running staging tests..."
-
-          # Test frontend with correct service name
+          # Port-forward frontend for local testing
           kubectl port-forward service/frontend-w10-aks -n $STAGING_NAMESPACE 8080:80 &
           PF_PID=$!
-          sleep 10
+          sleep 5
 
-          if curl -f -s --max-time 10 http://localhost:8080 >/dev/null; then
-            echo "✅ Frontend responding"
-          else
-            echo "❌ Frontend not responding"
-          fi
+          for svc in "${SERVICES[@]}"; do
+            NAME="${svc%%:*}"
+            URL="http://${svc##*:}"
+            echo "Checking $NAME at $URL"
+            if curl -f -s --max-time 10 $URL >/dev/null; then
+              echo "✅ $NAME is healthy"
+            else
+              echo "❌ $NAME is NOT responding"
+            fi
+          done
 
           kill $PF_PID 2>/dev/null || true
 
-          # Verify all pods are ready with correct service names
-          for svc in customer-service-w10-aks order-service-w10-aks product-service-w10-aks frontend-w10-aks; do
-            POD_COUNT=$(kubectl get pods -n $STAGING_NAMESPACE -l app=${svc%-w10-aks} --field-selector=status.phase=Running | grep -c ${svc%-w10-aks} || echo "0")
-            if [ "$POD_COUNT" -gt 0 ]; then
-              echo "✅ $svc pods running: $POD_COUNT"
-            else
-              echo "⚠️ No running pods found for $svc"
-            fi
-          done
-
+      # -------------------------------
+      # Display Staging Status
+      # -------------------------------
       - name: Display Staging Status
         run: |
-          echo "📋 Staging deployment summary for namespace: $STAGING_NAMESPACE"
           kubectl get services -n $STAGING_NAMESPACE
           kubectl get deployments -n $STAGING_NAMESPACE
           kubectl get pods -n $STAGING_NAMESPACE
 
+      # -------------------------------
+      # Cleanup Staging Environment
+      # -------------------------------
       - name: Cleanup Staging Environment
         if: always()
         run: |
-          echo "🧹 Cleaning up staging environment..."
           kubectl delete namespace $STAGING_NAMESPACE --ignore-not-found=true --timeout=60s
-          echo "✅ Staging cleaned up"
