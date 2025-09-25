@@ -2,7 +2,7 @@
 # debug-product-service.sh
 # Usage: ./debug-product-service.sh <namespace>
 
-NAMESPACE=${1:-staging-18018557331}  # default if not provided
+NAMESPACE=${1:-staging-18019609176}  # default if not provided
 DEPLOYMENT="product-service-w10-aks"
 
 echo "🔍 Checking deployment status for $DEPLOYMENT in namespace $NAMESPACE..."

@@ -116,12 +116,11 @@ jobs:
           kubectl wait --for=condition=available deployment/rabbitmq-deployment-w10-aks -n $STAGING_NAMESPACE --timeout=300s
           kubectl get svc rabbitmq-service-w10-aks -n $STAGING_NAMESPACE
 
-      # --- Services Deployment (Fixed) ---
       - name: Deploy All Services
         run: |
-          # Define services with their correct container names and deployment names
+          # Define services with CORRECT repository names (using underscores as they exist in ACR)
           declare -A SERVICES=(
-            ["product-service"]="product-service:product-service-container"
+            ["product-service"]="product_service:product-service-container"
             ["order-service"]="order_service:order-service-container" 
             ["customer-service"]="customer_service:customer-service-container"
           )
@@ -131,8 +130,13 @@ jobs:
             DEPLOYMENT_NAME="${SERVICE_FILE}-w10-aks"
             IMAGE="${{ secrets.ACR_LOGIN_SERVER }}/${IMAGE_NAME}:${{ env.IMAGE_TAG }}"
 
-            echo "Deploying $SERVICE_FILE with image $IMAGE"
+            echo "Deploying $SERVICE_FILE with repository $IMAGE_NAME"
+            echo "Image: $IMAGE"
             echo "Deployment: $DEPLOYMENT_NAME, Container: $CONTAINER_NAME"
+            
+            # Verify image exists in ACR
+            echo "🔍 Verifying image exists in ACR..."
+            az acr repository show --name teddyacr722week10 --image ${IMAGE_NAME}:${{ env.IMAGE_TAG }} || echo "⚠️ Image might not exist yet, but continuing..."
             
             # Apply the YAML file first
             kubectl apply -f k8s/${SERVICE_FILE}.yaml -n $STAGING_NAMESPACE

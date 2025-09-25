@@ -18,8 +18,7 @@ spec:
     spec:
       containers:
         - name: product-service-container
-          # FIXED IMAGE NAME: use hyphen, not underscore
-          image: teddyacr722week10.azurecr.io/product-service:latest
+          image: teddyacr722week10.azurecr.io/product_service:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
