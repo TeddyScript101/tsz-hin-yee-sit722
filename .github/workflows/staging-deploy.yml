@@ -137,12 +137,15 @@ jobs:
           kubectl rollout status deployment/frontend-w10-aks -n $STAGING_NAMESPACE --timeout=300s
 
       # -------------------------------
-      # Wait for Services, Port Forward, and Debug Logs - CORRECTED
+      # Wait for Services, Port Forward, and Debug Logs
       # -------------------------------
       - name: Wait for Services and Setup Port Forwarding with Logs
         run: |
           NAMESPACE=$STAGING_NAMESPACE
           POD_LABELS=("product-service" "order-service" "customer-service" "frontend")
+          SERVICES=("product-service-w10-aks" "order-service-w10-aks" "customer-service-w10-aks" "frontend-w10-aks")
+          LOCAL_PORTS=(18000 18001 18002 18003)
+          TARGET_PORTS=(8000 8000 8000 80)
 
           # Wait for pods and print logs
           for label in "${POD_LABELS[@]}"; do
@@ -163,33 +166,20 @@ jobs:
 
           # Kill any existing port forwards
           pkill -f "kubectl port-forward" || true
-          sleep 3
-
-          # ✅ CORRECTED: Port forward using SERVICE PORTS (not target ports)
-          echo "🚀 Setting up port forwarding with SERVICE ports..."
-
-          # Product Service: service port 8000
-          kubectl port-forward svc/product-service-w10-aks 18000:8000 -n $NAMESPACE --address=127.0.0.1 &
           sleep 2
 
-          # Order Service: service port 8001  
-          kubectl port-forward svc/order-service-w10-aks 18001:8001 -n $NAMESPACE --address=127.0.0.1 &
-          sleep 2
+          # Setup port forwards with correct mappings
+          for i in ${!SERVICES[@]}; do
+            svc=${SERVICES[$i]}
+            local_port=${LOCAL_PORTS[$i]}
+            target_port=${TARGET_PORTS[$i]}
+            echo "🚀 Port-forward $svc: localhost:$local_port -> $target_port"
+            kubectl port-forward svc/$svc $local_port:$target_port -n $NAMESPACE --address=127.0.0.1 &
+            sleep 1  # Small delay between port forwards
+          done
 
-          # Customer Service: service port 8002
-          kubectl port-forward svc/customer-service-w10-aks 18002:8002 -n $NAMESPACE --address=127.0.0.1 &
-          sleep 2
-
-          # Frontend: service port 80
-          kubectl port-forward svc/frontend-w10-aks 18003:80 -n $NAMESPACE --address=127.0.0.1 &
-          sleep 2
-
-          echo "⏳ Waiting 30s for port forwards to stabilize..."
-          sleep 30
-
-          # Verify port forwards are working
-          echo "🔍 Checking active port forwards:"
-          ps aux | grep "kubectl port-forward" | grep -v grep || echo "No port forwards found"
+          echo "⏳ Waiting 20s for port forwards to stabilize..."
+          sleep 20
 
       # -------------------------------
       # Test Service Connectivity
@@ -249,20 +239,17 @@ jobs:
 
           # Check port forwards
           echo "📄 Active port forwards:"
-          ps aux | grep "kubectl port-forward" | grep -v grep || echo "No port forwards found"
+          ps aux | grep "kubectl port-forward" || echo "No port forwards found"
 
           # Test internal service connectivity
           echo "📄 Testing internal service connectivity:"
-          kubectl run test-pod --image=curlimages/curl:latest --rm -i --restart=Never -n $STAGING_NAMESPACE -- curl -f -s --max-time 5 http://product-service-w10-aks:8000/health || echo "Product service internal test failed"
+          kubectl run test-pod --image=curlimages/curl:latest --rm -i --restart=Never -n $STAGING_NAMESPACE -- curl -f -s --max-time 5 http://product-service-w10-aks:8000/ || echo "Product service internal test failed"
 
       # -------------------------------
       # Cleanup Port Forwards
       # -------------------------------
-      - name: Cleanup Port Forwards
-        if: always()
-        run: |
-          echo "🧹 Cleaning up port forwards..."
-          pkill -f "kubectl port-forward" || true
-
-          echo "🧹 Cleaning up staging namespace $STAGING_NAMESPACE..."
-          kubectl delete all --all -n $STAGING_NAMESPACE || true
+      # - name: Cleanup Port Forwards
+      #   if: always()
+      #   run: |
+      #     echo "🧹 Cleaning up port forwards..."
+      #     pkill -f "kubectl port-forward" || true

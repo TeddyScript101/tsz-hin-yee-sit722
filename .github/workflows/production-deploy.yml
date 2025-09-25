@@ -156,8 +156,7 @@ jobs:
             fi
           done
 
-      # Health checks
-      - name: Verify Backend, Frontend, and RabbitMQ Health
+      - name: Verify Backend and Frontend
         run: |
           get_frontend_ip() {
             local svc=frontend-w10-aks
@@ -169,7 +168,10 @@ jobs:
             local name=$1
             local ip=$2
             local port=$3
-            local url="http://$ip:$port/health"
+            local path=${4:-health}  # default to /health if not specified
+            local url="http://$ip"
+            [ -n "$port" ] && url="$url:$port"
+            [ -n "$path" ] && url="$url/$path"
 
             retries=10
             while [ $retries -gt 0 ]; do
@@ -190,4 +192,4 @@ jobs:
           check_health "Product Service" $PRODUCT_API_IP 8000
           check_health "Order Service" $ORDER_API_IP 8001
           check_health "Customer Service" $CUSTOMER_API_IP 8002
-          check_health "Frontend" $FRONTEND_IP 80
+          check_health "Frontend" $FRONTEND_IP "" ""  # no port, no /health
