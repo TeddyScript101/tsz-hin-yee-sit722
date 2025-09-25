@@ -235,3 +235,26 @@ jobs:
               echo "ℹ️ $svc is $TYPE"
             fi
           done
+
+      - name: Verify Azure Network Permissions
+        run: |
+          echo "🔍 Checking Azure Network permissions..."
+
+          # Get current subscription ID
+          SUB_ID=$(az account show --query id -o tsv)
+          echo "Using subscription: $SUB_ID"
+
+          # Check Network Contributor role
+          echo "Checking Network Contributor role..."
+          az role assignment list \
+            --assignee ${{ secrets.AZURE_CLIENT_ID }} \
+            --scope /subscriptions/$SUB_ID/resourceGroups/teddysit722Week10 \
+            --query "[?roleDefinitionName=='Network Contributor']" -o table
+
+          # Verify resource group exists
+          echo "Verifying resource group..."
+          az group show --name teddysit722Week10 --query "name" -o tsv
+
+          # List existing public IPs
+          echo "Listing existing public IPs..."
+          az network public-ip list -g teddysit722Week10 -o table
