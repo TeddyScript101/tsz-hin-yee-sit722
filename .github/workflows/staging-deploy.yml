@@ -163,9 +163,9 @@ jobs:
           echo "🧪 Running health checks for backend services..."
 
           SERVICES=(
-            "product-service-w10-aks:$PRODUCT_API_IP"
-            "order-service-w10-aks:$ORDER_API_IP"
-            "customer-service-w10-aks:$CUSTOMER_API_IP"
+            "product-service-w10-aks:$PRODUCT_API_IP":8000
+            "order-service-w10-aks:$ORDER_API_IP":8001
+            "customer-service-w10-aks:$CUSTOMER_API_IP":8002
             "frontend-w10-aks:localhost:8080"
           )
 
