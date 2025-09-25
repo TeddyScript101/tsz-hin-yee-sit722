@@ -61,6 +61,7 @@ metadata:
     app: product-service
   annotations:
     service.beta.kubernetes.io/azure-load-balancer-resource-group: teddysit722Week10
+    kubernetes.azure.com/managed: "true"
 spec:
   selector:
     app: product-service
