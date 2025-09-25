@@ -49,24 +49,39 @@ jobs:
             --docker-password=${{ secrets.ACR_PASSWORD }} \
             --namespace=$STAGING_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: Update Service Types for Staging
+      - name: Validate YAML Files
+        run: |
+          echo "🔍 Validating Kubernetes YAML files..."
+          for file in k8s/*.yaml; do
+            if [ -f "$file" ]; then
+              echo "Validating $file"
+              kubectl apply -f "$file" --dry-run=client -n $STAGING_NAMESPACE || echo "❌ Validation failed for $file"
+            fi
+          done
+
+      - name: Update Service Types and Add ImagePullSecrets
         run: |
           # Change LoadBalancer to ClusterIP for internal testing
-          sed -i 's/type: LoadBalancer/type: ClusterIP/g' k8s/product-service.yaml
-          sed -i 's/type: LoadBalancer/type: ClusterIP/g' k8s/order-service.yaml  
-          sed -i 's/type: LoadBalancer/type: ClusterIP/g' k8s/customer-service.yaml
-          sed -i 's/type: LoadBalancer/type: ClusterIP/g' k8s/frontend.yaml
+          for service_file in k8s/product-service.yaml k8s/order-service.yaml k8s/customer-service.yaml k8s/frontend.yaml; do
+            if [ -f "$service_file" ]; then
+              sed -i 's/type: LoadBalancer/type: ClusterIP/g' "$service_file"
+              echo "✅ Updated service type in $service_file"
+            fi
+          done
 
-          # Add imagePullSecrets to all service deployments if missing
-          # Check and add imagePullSecrets for customer-service
-          if ! grep -q "imagePullSecrets:" k8s/customer-service.yaml; then
-            sed -i '/spec:/a\      imagePullSecrets:\n        - name: acr-auth' k8s/customer-service.yaml
-          fi
-
-          # Check and add imagePullSecrets for order-service
-          if ! grep -q "imagePullSecrets:" k8s/order-service.yaml; then
-            sed -i '/spec:/a\      imagePullSecrets:\n        - name: acr-auth' k8s/order-service.yaml
-          fi
+          # Add imagePullSecrets to all service deployments
+          for service_file in k8s/customer-service.yaml k8s/order-service.yaml k8s/product-service.yaml k8s/frontend.yaml; do
+            if [ -f "$service_file" ]; then
+              # Check if imagePullSecrets already exists
+              if ! grep -q "imagePullSecrets:" "$service_file"; then
+                # Add imagePullSecrets after spec: under template: spec:
+                sed -i '/template:/,/spec:/!b; /spec:/a\      imagePullSecrets:\n      - name: acr-auth' "$service_file"
+                echo "✅ Added imagePullSecrets to $service_file"
+              else
+                echo "ℹ️  imagePullSecrets already exists in $service_file"
+              fi
+            fi
+          done
 
       - name: Apply ConfigMaps
         run: kubectl apply -f k8s/configmaps.yaml -n $STAGING_NAMESPACE
@@ -104,21 +119,28 @@ jobs:
       # --- Services Deployment (Fixed) ---
       - name: Deploy All Services
         run: |
-          # Define services with their correct image names
-          declare -A SERVICES
-          SERVICES["product-service"]="product-service"  # Use hyphen for product-service
-          SERVICES["order-service"]="order_service"       # Use underscore for order_service
-          SERVICES["customer-service"]="customer_service" # Use underscore for customer_service
+          # Define services with their correct container names and deployment names
+          declare -A SERVICES=(
+            ["product-service"]="product-service:product-service-container"
+            ["order-service"]="order_service:order-service-container" 
+            ["customer-service"]="customer_service:customer-service-container"
+          )
 
           for SERVICE_FILE in "${!SERVICES[@]}"; do
-            IMAGE_NAME="${SERVICES[$SERVICE_FILE]}"
+            IFS=':' read -r IMAGE_NAME CONTAINER_NAME <<< "${SERVICES[$SERVICE_FILE]}"
             DEPLOYMENT_NAME="${SERVICE_FILE}-w10-aks"
-            CONTAINER_NAME="${SERVICE_FILE}-container"
             IMAGE="${{ secrets.ACR_LOGIN_SERVER }}/${IMAGE_NAME}:${{ env.IMAGE_TAG }}"
 
             echo "Deploying $SERVICE_FILE with image $IMAGE"
+            echo "Deployment: $DEPLOYMENT_NAME, Container: $CONTAINER_NAME"
+            
+            # Apply the YAML file first
             kubectl apply -f k8s/${SERVICE_FILE}.yaml -n $STAGING_NAMESPACE
+            
+            # Set the image with correct container name
             kubectl set image deployment/$DEPLOYMENT_NAME $CONTAINER_NAME=$IMAGE -n $STAGING_NAMESPACE
+            
+            # Wait for rollout
             kubectl rollout status deployment/$DEPLOYMENT_NAME -n $STAGING_NAMESPACE --timeout=300s
             kubectl wait --for=condition=available deployment/$DEPLOYMENT_NAME -n $STAGING_NAMESPACE --timeout=300s
           done
@@ -167,7 +189,7 @@ jobs:
         run: |
           declare -A SERVICES=(
             ["product-service"]="http://localhost:8000/health"
-            ["order-service"]="http://localhost:8001/health"
+            ["order-service"]="http://localhost:8001/health" 
             ["customer-service"]="http://localhost:8002/health"
             ["frontend"]="http://localhost:8080/"
           )
@@ -184,8 +206,12 @@ jobs:
                 sleep 5
                 if [ $i -eq $RETRIES ]; then
                   echo "❌ $name health check failed after $RETRIES attempts"
+                  # Use the correct label format
                   app_label=${name%-service}  # Remove -service suffix if present
-                  kubectl logs -l app=$app_label -n $STAGING_NAMESPACE --tail=50 || echo "No logs available"
+                  if [ "$name" == "frontend" ]; then
+                    app_label="frontend"
+                  fi
+                  kubectl logs -l app=$app_label -n $STAGING_NAMESPACE --tail=50 || echo "No logs available for app=$app_label"
                   exit 1
                 fi
               fi
@@ -252,6 +278,12 @@ jobs:
           echo ""
           echo "Product Service Logs:"
           kubectl logs -l app=product-service -n $STAGING_NAMESPACE --tail=100 || true
+          echo ""
+          echo "Order Service Logs:"
+          kubectl logs -l app=order-service -n $STAGING_NAMESPACE --tail=100 || true
+          echo ""
+          echo "Customer Service Logs:"
+          kubectl logs -l app=customer-service -n $STAGING_NAMESPACE --tail=100 || true
           echo ""
           echo "Events:"
           kubectl get events -n $STAGING_NAMESPACE --sort-by='.lastTimestamp' | tail -20 || true
