@@ -49,6 +49,12 @@ jobs:
       - name: Apply Secrets
         run: kubectl apply -f k8s/secrets.yaml -n production
 
+      # Deploy RabbitMQ
+      - name: Deploy RabbitMQ
+        run: |
+          kubectl apply -f k8s/rabbitmq.yaml -n production
+          kubectl rollout status statefulset/rabbitmq -n production --timeout=300s
+
       # Deploy databases
       - name: Deploy Product DB
         run: |
@@ -81,16 +87,7 @@ jobs:
           kubectl apply -f k8s/customer-service.yaml -n production
           kubectl rollout status deployment/customer-service-w10-aks -n production --timeout=300s
 
-      # Frontend deployment
-      - name: Login to ACR
-        run: |
-          echo ${{ secrets.ACR_PASSWORD }} | docker login -u ${{ secrets.ACR_USERNAME }} --password-stdin ${{ secrets.ACR_LOGIN_SERVER }}
-
-      - name: Build and Push Frontend Image
-        run: |
-          docker build -t ${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }} frontend
-          docker push ${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }}
-
+      # Wait for Backend External IPs
       - name: Wait for Backend External IPs
         run: |
           get_ip() {
@@ -122,28 +119,27 @@ jobs:
           echo "ORDER_API_IP=$ORDER_API_IP" >> $GITHUB_ENV
           echo "CUSTOMER_API_IP=$CUSTOMER_API_IP" >> $GITHUB_ENV
 
+      # Inject backend IPs into frontend
       - name: Inject Backend IPs into Frontend main.js
         run: |
-          echo "Injecting backend IPs into frontend/main.js"
           sed -i "s|_PRODUCT_API_URL_|http://$PRODUCT_API_IP:8000|g" frontend/main.js
           sed -i "s|_ORDER_API_URL_|http://$ORDER_API_IP:8001|g" frontend/main.js
           sed -i "s|_CUSTOMER_API_URL_|http://$CUSTOMER_API_IP:8002|g" frontend/main.js
 
-          echo "--- Modified main.js (first 30 lines) ---"
-          head -30 frontend/main.js
-          echo "---------------------------------"
-
+      # Login to ACR and build frontend image
       - name: Build and Push Frontend Image
         run: |
+          echo ${{ secrets.ACR_PASSWORD }} | docker login -u ${{ secrets.ACR_USERNAME }} --password-stdin ${{ secrets.ACR_LOGIN_SERVER }}
           docker build -t ${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }} frontend
           docker push ${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }}
 
+      # Deploy frontend using set image
       - name: Deploy Frontend
         run: |
-          kubectl set image deployment/frontend-w10-aks frontend-container=${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }} -n production
-          kubectl apply -f k8s/frontend.yaml -n production
+          kubectl set image deployment/frontend-w10-aks frontend=${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }} -n production
           kubectl rollout status deployment/frontend-w10-aks -n production --timeout=300s
 
+      # Display production status
       - name: Display Production Status
         run: |
           echo "📋 Production deployment summary:"
@@ -151,7 +147,7 @@ jobs:
           kubectl get deployments -n production
           kubectl get pods -n production
 
-          for svc in frontend-w10-aks product-service-w10-aks order-service-w10-aks customer-service-w10-aks; do
+          for svc in frontend-w10-aks product-service-w10-aks order-service-w10-aks customer-service-w10-aks rabbitmq; do
             TYPE=$(kubectl get svc $svc -n production -o jsonpath='{.spec.type}' 2>/dev/null || echo "NotFound")
             if [ "$TYPE" = "LoadBalancer" ]; then
               EXTERNAL_IP=$(kubectl get svc $svc -n production -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
@@ -161,8 +157,15 @@ jobs:
             fi
           done
 
-      - name: Verify Backend and Frontend Health
+      # Health checks
+      - name: Verify Backend, Frontend, and RabbitMQ Health
         run: |
+          get_frontend_ip() {
+            local svc=frontend-w10-aks
+            kubectl get svc $svc -n production -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+          }
+          FRONTEND_IP=$(get_frontend_ip)
+
           check_health() {
             local name=$1
             local ip=$2
@@ -185,8 +188,8 @@ jobs:
             exit 1
           }
 
-          # Check each service
           check_health "Product Service" $PRODUCT_API_IP 8000
           check_health "Order Service" $ORDER_API_IP 8001
           check_health "Customer Service" $CUSTOMER_API_IP 8002
           check_health "Frontend" $FRONTEND_IP 80
+          check_health "RabbitMQ" localhost 15672
