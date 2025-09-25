@@ -66,16 +66,19 @@ jobs:
         run: |
           kubectl apply -f k8s/product-db.yaml -n $STAGING_NAMESPACE
           kubectl rollout status deployment/product-db-deployment-w10-aks -n $STAGING_NAMESPACE --timeout=300s
+          kubectl wait --for=condition=available deployment/product-db-deployment-w10-aks -n $STAGING_NAMESPACE --timeout=300s
 
       - name: Deploy Order DB
         run: |
           kubectl apply -f k8s/order-db.yaml -n $STAGING_NAMESPACE
           kubectl rollout status deployment/order-db-deployment-w10-aks -n $STAGING_NAMESPACE --timeout=300s
+          kubectl wait --for=condition=available deployment/order-db-deployment-w10-aks -n $STAGING_NAMESPACE --timeout=300s
 
       - name: Deploy Customer DB
         run: |
           kubectl apply -f k8s/customer-db.yaml -n $STAGING_NAMESPACE
           kubectl rollout status deployment/customer-db-deployment-w10-aks -n $STAGING_NAMESPACE --timeout=300s
+          kubectl wait --for=condition=available deployment/customer-db-deployment-w10-aks -n $STAGING_NAMESPACE --timeout=300s
 
       - name: Deploy RabbitMQ
         run: |
@@ -241,16 +244,25 @@ jobs:
             echo 'Testing internal service connectivity...'
             echo '1. Product Service:'
             curl -s -o /dev/null -w 'Status: %{http_code}\n' http://product-service-w10-aks:8000/health || echo 'Failed'
+            echo '   Full Response:'
+            curl -s http://product-service-w10-aks:8000/health || echo 'No response'
             echo '2. Order Service:'
             curl -s -o /dev/null -w 'Status: %{http_code}\n' http://order-service-w10-aks:8001/health || echo 'Failed'
+            echo '   Full Response:'
+            curl -s http://order-service-w10-aks:8001/health || echo 'No response'
             echo '3. Customer Service:'
             curl -s -o /dev/null -w 'Status: %{http_code}\n' http://customer-service-w10-aks:8002/health || echo 'Failed'
+            echo '   Full Response:'
+            curl -s http://customer-service-w10-aks:8002/health || echo 'No response'
             echo '4. Frontend:'
             curl -s -o /dev/null -w 'Status: %{http_code}\n' http://frontend-w10-aks:80/ || echo 'Failed'
             echo '5. Testing service intercommunication:'
-            echo '   Product -> DB: ' && curl -s http://product-service-w10-aks:8000/health | grep -o '\"database\":\"[^\"]*\"' || echo 'DB check failed'
-            echo '   Order -> DB: ' && curl -s http://order-service-w10-aks:8001/health | grep -o '\"database\":\"[^\"]*\"' || echo 'DB check failed'
-            echo '   Customer -> DB: ' && curl -s http://customer-service-w10-aks:8002/health | grep -o '\"database\":\"[^\"]*\"' || echo 'DB check failed'
+            echo '   Product -> DB:'
+            curl -s http://product-service-w10-aks:8000/health | grep -o '\"database\":\"[^\"]*\"' || echo 'DB check failed'
+            echo '   Order -> DB:'
+            curl -s http://order-service-w10-aks:8001/health | grep -o '\"database\":\"[^\"]*\"' || echo 'DB check failed'
+            echo '   Customer -> DB:'
+            curl -s http://customer-service-w10-aks:8002/health | grep -o '\"database\":\"[^\"]*\"' || echo 'DB check failed'
             "
 
       - name: Check RabbitMQ Status
@@ -264,8 +276,23 @@ jobs:
 
           echo "🔍 Testing RabbitMQ connectivity from Order Service..."
           ORDER_POD=$(kubectl get pod -l app=order-service -n $STAGING_NAMESPACE -o jsonpath='{.items[0].metadata.name}')
-          kubectl exec $ORDER_POD -n $STAGING_NAMESPACE -- \
-            sh -c "nc -z rabbitmq-service-w10-aks 5672 && echo '✅ RabbitMQ port 5672 is reachable' || { echo '❌ RabbitMQ port 5672 not reachable'; exit 1; }"
+          for i in {1..3}; do
+            if kubectl exec $ORDER_POD -n $STAGING_NAMESPACE -- \
+              busybox nc -z rabbitmq-service-w10-aks 5672; then
+              echo "✅ RabbitMQ port 5672 is reachable (attempt $i/3)"
+              break
+            else
+              if [ $i -eq 3 ]; then
+                echo "❌ RabbitMQ port 5672 not reachable after 3 attempts"
+                echo "📄 Last 20 lines of RabbitMQ logs:"
+                kubectl logs -l app=rabbitmq -n $STAGING_NAMESPACE --tail=20
+                exit 1
+              else
+                echo "⏳ RabbitMQ port 5672 not reachable (attempt $i/3), retrying..."
+                sleep 5
+              fi
+            fi
+          done
 
       - name: Deployment Summary
         run: |
@@ -287,4 +314,6 @@ jobs:
         if: always()
         run: |
           echo "🧹 Cleaning up staging namespace..."
+          kubectl delete pod -l app=quick-test -n $STAGING_NAMESPACE --ignore-not-found=true
+          kubectl delete pod final-health-check -n $STAGING_NAMESPACE --ignore-not-found=true
           kubectl delete namespace $STAGING_NAMESPACE --ignore-not-found=true
