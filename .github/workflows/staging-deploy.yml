@@ -51,10 +51,22 @@ jobs:
 
       - name: Update Service Types for Staging
         run: |
+          # Change LoadBalancer to ClusterIP for internal testing
           sed -i 's/type: LoadBalancer/type: ClusterIP/g' k8s/product-service.yaml
           sed -i 's/type: LoadBalancer/type: ClusterIP/g' k8s/order-service.yaml  
           sed -i 's/type: LoadBalancer/type: ClusterIP/g' k8s/customer-service.yaml
           sed -i 's/type: LoadBalancer/type: ClusterIP/g' k8s/frontend.yaml
+
+          # Add imagePullSecrets to all service deployments if missing
+          # Check and add imagePullSecrets for customer-service
+          if ! grep -q "imagePullSecrets:" k8s/customer-service.yaml; then
+            sed -i '/spec:/a\      imagePullSecrets:\n        - name: acr-auth' k8s/customer-service.yaml
+          fi
+
+          # Check and add imagePullSecrets for order-service
+          if ! grep -q "imagePullSecrets:" k8s/order-service.yaml; then
+            sed -i '/spec:/a\      imagePullSecrets:\n        - name: acr-auth' k8s/order-service.yaml
+          fi
 
       - name: Apply ConfigMaps
         run: kubectl apply -f k8s/configmaps.yaml -n $STAGING_NAMESPACE
@@ -89,37 +101,47 @@ jobs:
           kubectl wait --for=condition=available deployment/rabbitmq-deployment-w10-aks -n $STAGING_NAMESPACE --timeout=300s
           kubectl get svc rabbitmq-service-w10-aks -n $STAGING_NAMESPACE
 
-      # --- Services Deployment (Dynamic) ---
+      # --- Services Deployment (Fixed) ---
       - name: Deploy All Services
         run: |
-          SERVICES=("product-service" "order-service" "customer-service")
+          # Define services with their correct image names
+          declare -A SERVICES
+          SERVICES["product-service"]="product-service"  # Use hyphen for product-service
+          SERVICES["order-service"]="order_service"       # Use underscore for order_service
+          SERVICES["customer-service"]="customer_service" # Use underscore for customer_service
 
-          for SERVICE in "${SERVICES[@]}"; do
-            DEPLOYMENT_NAME="${SERVICE//_/-}-w10-aks"   # convert underscores to dashes
-            CONTAINER_NAME="${SERVICE//_/-}-container"
-            IMAGE="${{ secrets.ACR_LOGIN_SERVER }}/$SERVICE:${{ env.IMAGE_TAG }}"
+          for SERVICE_FILE in "${!SERVICES[@]}"; do
+            IMAGE_NAME="${SERVICES[$SERVICE_FILE]}"
+            DEPLOYMENT_NAME="${SERVICE_FILE}-w10-aks"
+            CONTAINER_NAME="${SERVICE_FILE}-container"
+            IMAGE="${{ secrets.ACR_LOGIN_SERVER }}/${IMAGE_NAME}:${{ env.IMAGE_TAG }}"
 
-            kubectl apply -f k8s/$SERVICE.yaml -n $STAGING_NAMESPACE
+            echo "Deploying $SERVICE_FILE with image $IMAGE"
+            kubectl apply -f k8s/${SERVICE_FILE}.yaml -n $STAGING_NAMESPACE
             kubectl set image deployment/$DEPLOYMENT_NAME $CONTAINER_NAME=$IMAGE -n $STAGING_NAMESPACE
             kubectl rollout status deployment/$DEPLOYMENT_NAME -n $STAGING_NAMESPACE --timeout=300s
             kubectl wait --for=condition=available deployment/$DEPLOYMENT_NAME -n $STAGING_NAMESPACE --timeout=300s
           done
 
-      # --- Frontend ---
-      - name: Update Frontend Configuration for Cluster
-        run: |
-          FRONTEND_FILE=frontend/main.js
-          sed -i "s|_PRODUCT_API_URL_|http://product-service-w10-aks:8000|g" "$FRONTEND_FILE"
-          sed -i "s|_ORDER_API_URL_|http://order-service-w10-aks:8001|g" "$FRONTEND_FILE"
-          sed -i "s|_CUSTOMER_API_URL_|http://customer-service-w10-aks:8002|g" "$FRONTEND_FILE"
-
+      # --- Frontend - Build and Deploy ---
       - name: Login to ACR
         run: |
           echo ${{ secrets.ACR_PASSWORD }} | docker login -u ${{ secrets.ACR_USERNAME }} --password-stdin ${{ secrets.ACR_LOGIN_SERVER }}
 
+      - name: Update Frontend Configuration for Cluster
+        run: |
+          # Create a copy of the frontend directory to avoid modifying the original
+          cp -r frontend frontend-staging
+          FRONTEND_FILE=frontend-staging/main.js
+
+          # Update API URLs for internal cluster communication
+          sed -i "s|_PRODUCT_API_URL_|http://product-service-w10-aks:8000|g" "$FRONTEND_FILE"
+          sed -i "s|_ORDER_API_URL_|http://order-service-w10-aks:8001|g" "$FRONTEND_FILE"
+          sed -i "s|_CUSTOMER_API_URL_|http://customer-service-w10-aks:8002|g" "$FRONTEND_FILE"
+
       - name: Build and Push Frontend Image
         run: |
-          docker build -t ${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }} frontend
+          docker build -t ${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }} frontend-staging
           docker push ${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }}
 
       - name: Deploy Frontend
@@ -130,23 +152,31 @@ jobs:
           kubectl rollout status deployment/frontend-w10-aks -n $STAGING_NAMESPACE --timeout=600s
           kubectl wait --for=condition=available deployment/frontend-w10-aks -n $STAGING_NAMESPACE --timeout=300s
 
+      # --- Port-Forward for Testing ---
+      - name: Setup Port Forwarding for Tests
+        run: |
+          # Port-forward services for health checks
+          kubectl port-forward service/product-service-w10-aks 8000:8000 -n $STAGING_NAMESPACE &
+          kubectl port-forward service/order-service-w10-aks 8001:8001 -n $STAGING_NAMESPACE &
+          kubectl port-forward service/customer-service-w10-aks 8002:8002 -n $STAGING_NAMESPACE &
+          kubectl port-forward service/frontend-w10-aks 8080:80 -n $STAGING_NAMESPACE &
+          sleep 10  # Wait for port-forwards to establish
+
       # --- Health Checks ---
       - name: Retry Health Checks for Services
         run: |
-          SERVICES=(
-            "product-service-w10-aks:8000"
-            "order-service-w10-aks:8001"
-            "customer-service-w10-aks:8002"
-            "frontend-w10-aks:80"
+          declare -A SERVICES=(
+            ["product-service"]="http://localhost:8000/health"
+            ["order-service"]="http://localhost:8001/health"
+            ["customer-service"]="http://localhost:8002/health"
+            ["frontend"]="http://localhost:8080/"
           )
 
-          for service in "${SERVICES[@]}"; do
-            IFS=':' read -r svc port <<< "$service"
-            name=${svc%-w10-aks}
-            endpoint=$([ "$name" = "frontend" ] && echo "/" || echo "/health")
+          for name in "${!SERVICES[@]}"; do
+            url="${SERVICES[$name]}"
             RETRIES=5
             for i in $(seq 1 $RETRIES); do
-              if curl -f -s --max-time 10 "http://$svc:$port$endpoint" >/dev/null 2>&1; then
+              if curl -f -s --max-time 10 "$url" >/dev/null 2>&1; then
                 echo "✅ $name is ready (attempt $i/$RETRIES)"
                 break
               else
@@ -154,7 +184,8 @@ jobs:
                 sleep 5
                 if [ $i -eq $RETRIES ]; then
                   echo "❌ $name health check failed after $RETRIES attempts"
-                  kubectl logs -l app=$name -n $STAGING_NAMESPACE --tail=20 || echo "No logs available"
+                  app_label=${name%-service}  # Remove -service suffix if present
+                  kubectl logs -l app=$app_label -n $STAGING_NAMESPACE --tail=50 || echo "No logs available"
                   exit 1
                 fi
               fi
@@ -166,13 +197,17 @@ jobs:
         run: |
           echo "🔍 Checking RabbitMQ pod..."
           kubectl get pod -l app=rabbitmq -n $STAGING_NAMESPACE
-          echo "📄 Recent RabbitMQ logs:"
+          echo "🔄 Recent RabbitMQ logs:"
           kubectl logs -l app=rabbitmq -n $STAGING_NAMESPACE --tail=20
 
           echo "🔍 Testing RabbitMQ connectivity from Order Service..."
           ORDER_POD=$(kubectl get pod -l app=order-service -n $STAGING_NAMESPACE -o jsonpath='{.items[0].metadata.name}')
+
+          # Install netcat if not available
+          kubectl exec $ORDER_POD -n $STAGING_NAMESPACE -- sh -c "which nc || (apt-get update && apt-get install -y netcat-openbsd)" || true
+
           for i in {1..5}; do
-            if kubectl exec $ORDER_POD -n $STAGING_NAMESPACE -- sh -c "nc -z rabbitmq-service-w10-aks 5672"; then
+            if kubectl exec $ORDER_POD -n $STAGING_NAMESPACE -- sh -c "nc -zv rabbitmq-service-w10-aks 5672 2>&1"; then
               echo "✅ RabbitMQ port 5672 is reachable (attempt $i/5)"
               break
             else
@@ -180,7 +215,7 @@ jobs:
               sleep 5
               if [ $i -eq 5 ]; then
                 echo "❌ RabbitMQ port 5672 not reachable after 5 attempts"
-                kubectl logs -l app=rabbitmq -n $STAGING_NAMESPACE --tail=20
+                kubectl logs -l app=rabbitmq -n $STAGING_NAMESPACE --tail=50
                 exit 1
               fi
             fi
@@ -201,13 +236,35 @@ jobs:
           echo "🔗 Services:"
           kubectl get svc -n $STAGING_NAMESPACE
           echo ""
+          echo "🔍 Pods Status:"
+          kubectl get pods -n $STAGING_NAMESPACE
+          echo ""
           echo "✅ All services deployed successfully to staging environment!"
 
+      # --- Debug Information (if needed) ---
+      - name: Collect Debug Information
+        if: failure()
+        run: |
+          echo "📋 Collecting debug information..."
+          echo "==================================="
+          echo "Failed Pods:"
+          kubectl get pods -n $STAGING_NAMESPACE | grep -v Running || true
+          echo ""
+          echo "Product Service Logs:"
+          kubectl logs -l app=product-service -n $STAGING_NAMESPACE --tail=100 || true
+          echo ""
+          echo "Events:"
+          kubectl get events -n $STAGING_NAMESPACE --sort-by='.lastTimestamp' | tail -20 || true
+
       # --- Cleanup ---
-      - name: Cleanup
+      - name: Cleanup Port Forwards
+        if: always()
+        run: |
+          # Kill all port-forward processes
+          pkill -f "kubectl port-forward" || true
+
+      - name: Cleanup Namespace
         if: always()
         run: |
           echo "🧹 Cleaning up staging namespace..."
-          kubectl delete pod -l app=quick-test -n $STAGING_NAMESPACE --ignore-not-found=true
-          kubectl delete pod final-health-check -n $STAGING_NAMESPACE --ignore-not-found=true
-          kubectl delete namespace $STAGING_NAMESPACE --ignore-not-found=true
+          kubectl delete namespace $STAGING_NAMESPACE --ignore-not-found=true --wait=false
