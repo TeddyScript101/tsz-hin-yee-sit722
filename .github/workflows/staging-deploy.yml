@@ -192,7 +192,8 @@ jobs:
           echo "🌐 Checking service status in namespace $STAGING_NAMESPACE..."
           kubectl get svc -n $STAGING_NAMESPACE
 
-          for svc in frontend product-service order-service customer-service; do
+          # Updated service names to match -w10-aks suffix
+          for svc in frontend-w10-aks product-service-w10-aks order-service-w10-aks customer-service-w10-aks; do
             TYPE=$(kubectl get svc $svc -n $STAGING_NAMESPACE -o jsonpath='{.spec.type}' 2>/dev/null || echo "NotFound")
             if [ "$TYPE" = "LoadBalancer" ]; then
               EXTERNAL_IP=$(kubectl get svc $svc -n $STAGING_NAMESPACE -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
@@ -206,8 +207,8 @@ jobs:
         run: |
           echo "🧪 Running staging tests..."
 
-          # Test frontend
-          kubectl port-forward service/frontend -n $STAGING_NAMESPACE 8080:80 &
+          # Test frontend with correct service name
+          kubectl port-forward service/frontend-w10-aks -n $STAGING_NAMESPACE 8080:80 &
           PF_PID=$!
           sleep 10
 
@@ -219,9 +220,9 @@ jobs:
 
           kill $PF_PID 2>/dev/null || true
 
-          # Verify all pods are ready
-          for svc in customer-service order-service product-service frontend; do
-            POD_COUNT=$(kubectl get pods -n $STAGING_NAMESPACE -l app=$svc --field-selector=status.phase=Running | grep -c $svc || echo "0")
+          # Verify all pods are ready with correct service names
+          for svc in customer-service-w10-aks order-service-w10-aks product-service-w10-aks frontend-w10-aks; do
+            POD_COUNT=$(kubectl get pods -n $STAGING_NAMESPACE -l app=${svc%-w10-aks} --field-selector=status.phase=Running | grep -c ${svc%-w10-aks} || echo "0")
             if [ "$POD_COUNT" -gt 0 ]; then
               echo "✅ $svc pods running: $POD_COUNT"
             else
