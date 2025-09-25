@@ -24,7 +24,7 @@ jobs:
 
     strategy:
       matrix:
-        service: [customer-service, order-service, product-service]
+        service: [customer_service, order_service, product_service]
 
     env:
       POSTGRES_USER: postgres
@@ -63,11 +63,11 @@ jobs:
 
       - name: Set DATABASE_URL for service
         run: |
-          if [ "${{ matrix.service }}" = "customer-service" ]; then
+          if [ "${{ matrix.service }}" = "customer_service" ]; then
             export DATABASE_URL=postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:$POSTGRES_PORT/customers
-          elif [ "${{ matrix.service }}" = "order-service" ]; then
+          elif [ "${{ matrix.service }}" = "order_service" ]; then
             export DATABASE_URL=postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:$POSTGRES_PORT/orders
-          elif [ "${{ matrix.service }}" = "product-service" ]; then
+          elif [ "${{ matrix.service }}" = "product_service" ]; then
             export DATABASE_URL=postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:$POSTGRES_PORT/products
           fi
           echo "DATABASE_URL=$DATABASE_URL" >> $GITHUB_ENV
@@ -82,7 +82,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        service: [customer-service, order-service, product-service] # Removed frontend from the matrix
+        service: [customer_service, order_service, product_service] # Removed frontend from the matrix
 
     steps:
       - name: Checkout code
