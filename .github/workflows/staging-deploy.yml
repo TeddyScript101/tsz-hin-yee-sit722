@@ -66,19 +66,16 @@ jobs:
         run: |
           kubectl apply -f k8s/product-db.yaml -n $STAGING_NAMESPACE
           kubectl rollout status deployment/product-db-deployment-w10-aks -n $STAGING_NAMESPACE --timeout=300s
-          kubectl wait --for=condition=available deployment/product-db-deployment-w10-aks -n $STAGING_NAMESPACE --timeout=300s
 
       - name: Deploy Order DB
         run: |
           kubectl apply -f k8s/order-db.yaml -n $STAGING_NAMESPACE
           kubectl rollout status deployment/order-db-deployment-w10-aks -n $STAGING_NAMESPACE --timeout=300s
-          kubectl wait --for=condition=available deployment/order-db-deployment-w10-aks -n $STAGING_NAMESPACE --timeout=300s
 
       - name: Deploy Customer DB
         run: |
           kubectl apply -f k8s/customer-db.yaml -n $STAGING_NAMESPACE
           kubectl rollout status deployment/customer-db-deployment-w10-aks -n $STAGING_NAMESPACE --timeout=300s
-          kubectl wait --for=condition=available deployment/customer-db-deployment-w10-aks -n $STAGING_NAMESPACE --timeout=300s
 
       - name: Deploy RabbitMQ
         run: |
@@ -129,55 +126,37 @@ jobs:
 
       - name: Wait for Services and Test Internal Connectivity
         run: |
-          echo "🔍 Checking pod status..."
-          kubectl get pods -n $STAGING_NAMESPACE -o wide
-
-          echo "✅ All pods are running. Proceeding with connectivity tests..."
-
-          echo "📊 Verifying pod readiness..."
-          ALL_READY=true
-          PODS=$(kubectl get pods -n $STAGING_NAMESPACE --field-selector=status.phase==Running -o jsonpath='{.items[*].metadata.name}')
-
-          for pod in $PODS; do
-            STATUS=$(kubectl get pod $pod -n $STAGING_NAMESPACE -o jsonpath='{.status.phase}')
-            READY=$(kubectl get pod $pod -n $STAGING_NAMESPACE -o jsonpath='{.status.containerStatuses[0].ready}')
-            if [ "$STATUS" = "Running" ] && [ "$READY" = "true" ]; then
-              echo "✅ $pod: $STATUS and ready=$READY"
-            else
-              echo "❌ $pod: $STATUS, ready=$READY"
-              ALL_READY=false
-            fi
-          done
-
-          if [ "$ALL_READY" = "true" ]; then
-            echo "🎉 All pods are ready! Proceeding with tests..."
-          else
-            echo "⚠️ Some pods are not ready, but continuing with tests..."
-          fi
-
-          echo "🔍 Testing internal service connectivity..."
-
-          SERVICES=(
-            "product-service-w10-aks:8000"
-            "order-service-w10-aks:8001"
-            "customer-service-w10-aks:8002"
-            "frontend-w10-aks:80"
+          echo "🔍 Checking deployment rollout status..."
+          DEPLOYMENTS=(
+            "product-service-w10-aks"
+            "order-service-w10-aks"
+            "customer-service-w10-aks"
+            "frontend-w10-aks"
+            "rabbitmq-deployment-w10-aks"
+            "product-db-deployment-w10-aks"
+            "order-db-deployment-w10-aks"
+            "customer-db-deployment-w10-aks"
           )
 
-          for service in "${SERVICES[@]}"; do
-            IFS=':' read -r svc port <<< "$service"
-            name=${svc%-w10-aks}
-            endpoint=$([ "$name" = "frontend" ] && echo "/" || echo "/health")
-
-            echo "🔍 Testing $name..."
-            if kubectl run quick-test-$name --image=curlimages/curl:latest --rm -i --restart=Never -n $STAGING_NAMESPACE -- \
-              curl -f -s --max-time 15 "http://$svc:$port$endpoint" >/dev/null 2>&1; then
-              echo "✅ $name is reachable"
-            else
-              echo "⚠️ $name may not be fully ready yet"
-              kubectl logs -l app=$name -n $STAGING_NAMESPACE --tail=20 2>/dev/null || echo "No logs available for $name"
-            fi
+          for dep in "${DEPLOYMENTS[@]}"; do
+            echo "⏳ Waiting for deployment/$dep to be available..."
+            kubectl rollout status deployment/$dep -n $STAGING_NAMESPACE --timeout=300s
+            kubectl wait --for=condition=available deployment/$dep -n $STAGING_NAMESPACE --timeout=300s
+            echo "✅ $dep is ready"
           done
+
+          echo "📊 Verifying pod readiness by label..."
+          for dep in "${DEPLOYMENTS[@]}"; do
+            APP=$(echo $dep | sed 's/-deployment.*//')
+            PODS=$(kubectl get pods -l app=$APP -n $STAGING_NAMESPACE -o jsonpath='{.items[*].metadata.name}')
+            for pod in $PODS; do
+              STATUS=$(kubectl get pod $pod -n $STAGING_NAMESPACE -o jsonpath='{.status.phase}')
+              READY=$(kubectl get pod $pod -n $STAGING_NAMESPACE -o jsonpath='{.status.containerStatuses[0].ready}')
+              echo "🔎 $pod -> status=$STATUS, ready=$READY"
+            done
+          done
+
+          echo "🎉 All deployments rolled out and pods are ready. Proceeding with connectivity tests..."
 
       - name: Test Service Health Endpoints
         run: |
@@ -227,9 +206,7 @@ jobs:
       - name: Check Service Logs for Errors
         run: |
           echo "🔍 Checking service logs for errors..."
-
           PODS=$(kubectl get pods -n $STAGING_NAMESPACE --field-selector=status.phase==Running -o jsonpath='{.items[*].metadata.name}')
-
           for pod in $PODS; do
             echo "--- Checking $pod for errors ---"
             kubectl logs $pod -n $STAGING_NAMESPACE --tail=50 | grep -i "error\|exception\|fail\|timeout" | head -5 || echo "No errors found in $pod"
@@ -268,12 +245,9 @@ jobs:
       - name: Check RabbitMQ Status
         run: |
           echo "🔍 Checking RabbitMQ status..."
-
           kubectl get pod -l app=rabbitmq -n $STAGING_NAMESPACE
-
           echo "📄 RabbitMQ recent logs:"
           kubectl logs -l app=rabbitmq -n $STAGING_NAMESPACE --tail=20 | grep -i "connection\|connected\|error" | tail -10 || echo "No relevant RabbitMQ logs found"
-
           echo "🔍 Testing RabbitMQ connectivity from Order Service..."
           ORDER_POD=$(kubectl get pod -l app=order-service -n $STAGING_NAMESPACE -o jsonpath='{.items[0].metadata.name}')
           for i in {1..3}; do
