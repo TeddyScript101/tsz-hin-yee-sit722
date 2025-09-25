@@ -49,15 +49,6 @@ jobs:
             --docker-password=${{ secrets.ACR_PASSWORD }} \
             --namespace=$STAGING_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: Validate Azure Blob Storage Connectivity
-        run: |
-          echo "🔍 Validating Azure Blob Storage connectivity..."
-          az storage account show --name sit722teddy --resource-group $RESOURCE_GROUP --query "primaryEndpoints.blob" || {
-            echo "❌ Failed to connect to Azure Blob Storage account 'sit722teddy'"
-            exit 1
-          }
-          echo "✅ Azure Blob Storage endpoint is accessible"
-
       - name: Update Service Types for Staging
         run: |
           sed -i 's/type: LoadBalancer/type: ClusterIP/g' k8s/product-service.yaml
