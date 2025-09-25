@@ -137,28 +137,46 @@ jobs:
           kubectl rollout status deployment/frontend-w10-aks -n $STAGING_NAMESPACE --timeout=300s
 
       # -------------------------------
-      # Wait for Services and Port Forward
+      # Wait for Services, Port Forward, and Debug Logs
       # -------------------------------
-      - name: Wait for Services and Setup Port Forwarding
+      - name: Wait for Services and Setup Port Forwarding with Logs
         run: |
           NAMESPACE=$STAGING_NAMESPACE
-          SERVICES=("product-service" "order-service" "customer-service" "frontend")
-          LOCAL_PORTS=(18000 18001 18002 18003)
 
-          # Wait for pods to be ready
-          for svc in "${SERVICES[@]}"; do
-            echo "🔍 Waiting for pods of $svc to be ready..."
-            kubectl wait --for=condition=Ready pod -l app=$svc-w10-aks -n $NAMESPACE --timeout=180s
+          # Labels for waiting on pods
+          POD_LABELS=("product-service" "order-service" "customer-service" "frontend")
+
+          # Corresponding Service names for port forwarding
+          SERVICES=("product-service-w10-aks" "order-service-w10-aks" "customer-service-w10-aks" "frontend-w10-aks")
+          LOCAL_PORTS=(18000 18001 18002 18003)
+          TARGET_PORTS=(8000 8001 8002 80)  # container ports
+
+          # Wait for pods to be ready and print logs
+          for label in "${POD_LABELS[@]}"; do
+            echo "🔍 Waiting for pods with label app=$label to be ready..."
+            kubectl wait --for=condition=Ready pod -l app=$label -n $NAMESPACE --timeout=180s || true
+            echo "📄 Listing pods for $label:"
+            kubectl get pods -l app=$label -n $NAMESPACE
+            echo "📝 Last 20 lines of pod logs for $label:"
+            for pod in $(kubectl get pods -l app=$label -n $NAMESPACE -o jsonpath='{.items[*].metadata.name}'); do
+              echo "--- Logs for $pod ---"
+              kubectl logs $pod -n $NAMESPACE --tail=20
+            done
           done
+
+          # List services for debug
+          echo "📄 Listing services in namespace $NAMESPACE:"
+          kubectl get svc -n $NAMESPACE
 
           # Setup port forwards
           for i in ${!SERVICES[@]}; do
             svc=${SERVICES[$i]}
             local_port=${LOCAL_PORTS[$i]}
-            target_port=$(kubectl get svc $svc-w10-aks -n $NAMESPACE -o jsonpath='{.spec.ports[0].targetPort}')
+            target_port=${TARGET_PORTS[$i]}
             echo "🚀 Port-forward $svc: localhost:$local_port -> $target_port"
-            kubectl port-forward svc/$svc-w10-aks $local_port:$target_port -n $NAMESPACE &
+            kubectl port-forward svc/$svc $local_port:$target_port -n $NAMESPACE &
           done
+
           echo "⏳ Waiting 10s for port forwards to stabilize..."
           sleep 10
 
@@ -210,8 +228,8 @@ jobs:
       # -------------------------------
       # Cleanup Port Forwards
       # -------------------------------
-      - name: Cleanup Port Forwards
-        if: always()
-        run: |
-          echo "🧹 Cleaning up port forwards..."
-          pkill -f "kubectl port-forward" || true
+      # - name: Cleanup Port Forwards
+      #   if: always()
+      #   run: |
+      #     echo "🧹 Cleaning up port forwards..."
+      #     pkill -f "kubectl port-forward" || true
