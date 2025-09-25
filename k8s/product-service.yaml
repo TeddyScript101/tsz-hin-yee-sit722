@@ -16,8 +16,6 @@ spec:
       labels:
         app: product-service
     spec:
-      imagePullSecrets:
-        - name: acr-auth
       containers:
         - name: product-service-container
           image: teddyacr722week10.azurecr.io/product_service:${IMAGE_TAG}
@@ -42,6 +40,8 @@ spec:
                 secretKeyRef:
                   name: ecomm-secrets-w10-aks
                   key: POSTGRES_PASSWORD
+      imagePullSecrets:
+        - name: acr-auth
 ---
 apiVersion: v1
 kind: Service
