@@ -162,21 +162,29 @@ jobs:
         run: |
           echo "🧪 Running health checks for backend services..."
 
+          PRODUCT_API_IP=$(kubectl get svc product-service-w10-aks -n $STAGING_NAMESPACE -o jsonpath='{.spec.clusterIP}')
+          ORDER_API_IP=$(kubectl get svc order-service-w10-aks -n $STAGING_NAMESPACE -o jsonpath='{.spec.clusterIP}')
+          CUSTOMER_API_IP=$(kubectl get svc customer-service-w10-aks -n $STAGING_NAMESPACE -o jsonpath='{.spec.clusterIP}')
+
           SERVICES=(
-            "product-service-w10-aks:$PRODUCT_API_IP":8000
-            "order-service-w10-aks:$ORDER_API_IP":8001
-            "customer-service-w10-aks:$CUSTOMER_API_IP":8002
+            "product-service-w10-aks:$PRODUCT_API_IP:8000"
+            "order-service-w10-aks:$ORDER_API_IP:8001"
+            "customer-service-w10-aks:$CUSTOMER_API_IP:8002"
             "frontend-w10-aks:localhost:8080"
           )
 
-          # Port-forward frontend for local testing
+          # Port-forward frontend
           kubectl port-forward service/frontend-w10-aks -n $STAGING_NAMESPACE 8080:80 &
           PF_PID=$!
           sleep 5
 
           for svc in "${SERVICES[@]}"; do
             NAME="${svc%%:*}"
-            URL="http://${svc##*:}"
+            HOST="${svc#*:}"
+            PORT="${HOST#*:}"
+            HOST="${HOST%%:*}"
+
+            URL="http://$HOST:$PORT"
             echo "Checking $NAME at $URL"
             if curl -f -s --max-time 10 $URL >/dev/null; then
               echo "✅ $NAME is healthy"
