@@ -40,6 +40,16 @@ spec:
                 secretKeyRef:
                   name: ecomm-secrets-w10-aks
                   key: POSTGRES_PASSWORD
+            - name: AZURE_STORAGE_ACCOUNT_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: ecomm-secrets-w10-aks
+                  key: AZURE_STORAGE_ACCOUNT_NAME
+            - name: AZURE_STORAGE_ACCOUNT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ecomm-secrets-w10-aks
+                  key: AZURE_STORAGE_ACCOUNT_KEY
       imagePullSecrets:
         - name: acr-auth
 ---

@@ -52,33 +52,29 @@ jobs:
       # -------------------------------
       # Update image tags in YAML files
       # -------------------------------
-      - name: Update Image Tags and Add Pull Secrets
+      - name: Update Image Tags
         run: |
-          # Update product service image with proper tag
-          sed -i "s|image: teddyacr722week10.azurecr.io/product_service:\${IMAGE_TAG}|image: ${{ secrets.ACR_LOGIN_SERVER }}/product_service:${{ env.IMAGE_TAG }}|g" k8s/product-service.yaml
+          # First apply the YAML files
+          kubectl apply -f k8s/product-service.yaml -n $STAGING_NAMESPACE
+          kubectl apply -f k8s/order-service.yaml -n $STAGING_NAMESPACE
+          kubectl apply -f k8s/customer-service.yaml -n $STAGING_NAMESPACE
 
-          # Update order service image  
-          sed -i "s|image: teddyacr722week10.azurecr.io/order_service:\${IMAGE_TAG}|image: ${{ secrets.ACR_LOGIN_SERVER }}/order_service:${{ env.IMAGE_TAG }}|g" k8s/order-service.yaml
+          # Then update images using kubectl set image
+          kubectl set image deployment/product-service-w10-aks \
+            product-service-container=${{ secrets.ACR_LOGIN_SERVER }}/product_service:${{ env.IMAGE_TAG }} \
+            -n $STAGING_NAMESPACE
 
-          # Update customer service image
-          sed -i "s|image: teddyacr722week10.azurecr.io/customer_service:\${IMAGE_TAG}|image: ${{ secrets.ACR_LOGIN_SERVER }}/customer_service:${{ env.IMAGE_TAG }}|g" k8s/customer-service.yaml
+          kubectl set image deployment/order-service-w10-aks \
+            order-service-container=${{ secrets.ACR_LOGIN_SERVER }}/order_service:${{ env.IMAGE_TAG }} \
+            -n $STAGING_NAMESPACE
 
-          # Update frontend image
-          sed -i "s|image: teddyacr722week10.azurecr.io/frontend:\${IMAGE_TAG}|image: ${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }}|g" k8s/frontend.yaml
+          kubectl set image deployment/customer-service-w10-aks \
+            customer-service-container=${{ secrets.ACR_LOGIN_SERVER }}/customer_service:${{ env.IMAGE_TAG }} \
+            -n $STAGING_NAMESPACE
 
-          # Add imagePullSecrets to service deployments
-          for file in k8s/*-service.yaml; do
-            echo "Adding imagePullSecrets to $file"
-            sed -i '/spec:/a\      imagePullSecrets:\n      - name: acr-auth' "$file"
-          done
-
-          # Verify changes
-          echo "🔍 Checking configurations:"
-          for file in k8s/*-service.yaml; do
-            echo "Checking $file:"
-            grep -A 2 "imagePullSecrets:" "$file" || echo "No imagePullSecrets found"
-            grep "image:" "$file"
-          done
+          # Verify the updates
+          echo "🔍 Verifying deployment images:"
+          kubectl get deployments -n $STAGING_NAMESPACE -o=jsonpath='{range .items[*]}{"\n"}{.metadata.name}{":\n"}{range .spec.template.spec.containers[*]}{.name}{" -> "}{.image}{"\n"}{end}{end}'
 
       # -------------------------------
       # Update service types for staging (ClusterIP instead of LoadBalancer)
