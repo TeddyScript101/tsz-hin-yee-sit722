@@ -14,6 +14,8 @@ spec:
       labels:
         app: customer-service
     spec:
+      imagePullSecrets:
+        - name: acr-auth
       containers:
         - name: customer-service-container
           image: teddyacr722week10.azurecr.io/customer_service:latest

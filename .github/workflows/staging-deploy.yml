@@ -151,7 +151,13 @@ jobs:
         run: |
           kubectl apply -f k8s/customer-service.yaml -n $STAGING_NAMESPACE
           kubectl rollout status deployment/customer-service-w10-aks -n $STAGING_NAMESPACE --timeout=300s
-          kubectl wait --for=condition=Ready pod -l app=customer-service -n $STAGING_NAMESPACE --timeout=180s
+
+          # Wait only for running pods
+          kubectl wait --for=condition=Ready pod \
+            -l app=customer-service \
+            --field-selector status.phase=Running \
+            -n $STAGING_NAMESPACE \
+            --timeout=180s
 
       # -------------------------------
       # Inject Service URLs into Frontend
