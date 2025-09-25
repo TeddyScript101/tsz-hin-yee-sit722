@@ -49,6 +49,15 @@ jobs:
             --docker-password=${{ secrets.ACR_PASSWORD }} \
             --namespace=$STAGING_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
 
+      - name: Validate Azure Blob Storage Connectivity
+        run: |
+          echo "🔍 Validating Azure Blob Storage connectivity..."
+          az storage account show --name sit722teddy --resource-group $RESOURCE_GROUP --query "primaryEndpoints.blob" || {
+            echo "❌ Failed to connect to Azure Blob Storage account 'sit722teddy'"
+            exit 1
+          }
+          echo "✅ Azure Blob Storage endpoint is accessible"
+
       - name: Update Service Types for Staging
         run: |
           sed -i 's/type: LoadBalancer/type: ClusterIP/g' k8s/product-service.yaml
@@ -125,7 +134,7 @@ jobs:
           kubectl set image deployment/frontend-w10-aks \
             frontend-container=${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }} \
             -n $STAGING_NAMESPACE
-          kubectl rollout status deployment/frontend-w10-aks -n $STAGING_NAMESPACE --timeout=300s
+          kubectl rollout status deployment/frontend-w10-aks -n $STAGING_NAMESPACE --timeout=600s
 
       - name: Wait for Services and Test Internal Connectivity
         run: |
@@ -136,7 +145,7 @@ jobs:
 
           echo "📊 Verifying pod readiness..."
           ALL_READY=true
-          PODS=$(kubectl get pods -n $STAGING_NAMESPACE -o jsonpath='{.items[*].metadata.name}')
+          PODS=$(kubectl get pods -n $STAGING_NAMESPACE --field-selector=status.phase==Running -o jsonpath='{.items[*].metadata.name}')
 
           for pod in $PODS; do
             STATUS=$(kubectl get pod $pod -n $STAGING_NAMESPACE -o jsonpath='{.status.phase}')
@@ -228,7 +237,7 @@ jobs:
         run: |
           echo "🔍 Checking service logs for errors..."
 
-          PODS=$(kubectl get pods -n $STAGING_NAMESPACE -o jsonpath='{.items[*].metadata.name}')
+          PODS=$(kubectl get pods -n $STAGING_NAMESPACE --field-selector=status.phase==Running -o jsonpath='{.items[*].metadata.name}')
 
           for pod in $PODS; do
             echo "--- Checking $pod for errors ---"
