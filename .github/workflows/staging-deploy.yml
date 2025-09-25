@@ -145,7 +145,7 @@ jobs:
           POD_LABELS=("product-service" "order-service" "customer-service" "frontend")
           SERVICES=("product-service-w10-aks" "order-service-w10-aks" "customer-service-w10-aks" "frontend-w10-aks")
           LOCAL_PORTS=(18000 18001 18002 18003)
-          TARGET_PORTS=(8000 8000 8000 80)
+          TARGET_PORTS=(8000 8001 8002 80)
 
           # Wait for pods and print logs
           for label in "${POD_LABELS[@]}"; do
