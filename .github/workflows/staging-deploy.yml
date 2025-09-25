@@ -89,7 +89,7 @@ jobs:
       - name: Deploy RabbitMQ
         run: |
           kubectl apply -f k8s/rabbitmq.yaml -n $STAGING_NAMESPACE
-          kubectl rollout status statefulset/rabbitmq -n $STAGING_NAMESPACE --timeout=300s
+          kubectl rollout status deployment/rabbitmq-deployment-w10-aks -n $STAGING_NAMESPACE --timeout=300s
 
       # -------------------------------
       # Deploy Backend Services
