@@ -154,3 +154,33 @@ jobs:
               echo "ℹ️ $svc is $TYPE"
             fi
           done
+
+      - name: Verify Backend and Frontend Health
+        run: |
+          check_health() {
+            local name=$1
+            local ip=$2
+            local port=$3
+            local url="http://$ip:$port/health"
+
+            retries=10
+            while [ $retries -gt 0 ]; do
+              STATUS=$(curl -s -o /dev/null -w "%{http_code}" $url || echo "000")
+              if [ "$STATUS" -eq 200 ]; then
+                echo "✅ $name is healthy at $url"
+                return 0
+              fi
+              echo "⏳ Waiting for $name to be healthy... ($retries attempts left)"
+              sleep 5
+              retries=$((retries - 1))
+            done
+
+            echo "❌ $name failed health check at $url"
+            exit 1
+          }
+
+          # Check each service
+          check_health "Product Service" $PRODUCT_API_IP 8000
+          check_health "Order Service" $ORDER_API_IP 8001
+          check_health "Customer Service" $CUSTOMER_API_IP 8002
+          check_health "Frontend" $FRONTEND_IP 80
