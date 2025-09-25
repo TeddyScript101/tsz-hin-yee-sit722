@@ -135,7 +135,7 @@ jobs:
       # Deploy frontend using set image
       - name: Deploy Frontend
         run: |
-          kubectl set image deployment/frontend-w10-aks frontend=${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }} -n production
+          kubectl set image deployment/frontend-w10-aks frontend-container=${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }} -n production
           kubectl rollout status deployment/frontend-w10-aks -n production --timeout=300s
 
       # Display production status
