@@ -18,8 +18,7 @@ spec:
     spec:
       containers:
         - name: product-service-container
-
-          image: teddyacr722week10.azurecr.io/product_service:${IMAGE_TAG}
+          image: teddyacr722week10.azurecr.io/product_service:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
@@ -51,31 +50,8 @@ spec:
                 secretKeyRef:
                   name: ecomm-secrets-w10-aks
                   key: AZURE_STORAGE_ACCOUNT_KEY
-            - name: AZURE_STORAGE_CONTAINER_NAME
-              valueFrom:
-                configMapKeyRef:
-                  name: ecomm-config-w10-aks
-                  key: AZURE_STORAGE_CONTAINER_NAME
-            - name: AZURE_SAS_TOKEN_EXPIRY_HOURS
-              valueFrom:
-                configMapKeyRef:
-                  name: ecomm-config-w10-aks
-                  key: AZURE_SAS_TOKEN_EXPIRY_HOURS
-            - name: RABBITMQ_HOST
-              valueFrom:
-                configMapKeyRef:
-                  name: ecomm-config-w10-aks
-                  key: RABBITMQ_HOST
-            - name: RABBITMQ_USER
-              valueFrom:
-                secretKeyRef:
-                  name: ecomm-secrets-w10-aks
-                  key: RABBITMQ_USER
-            - name: RABBITMQ_PASS
-              valueFrom:
-                secretKeyRef:
-                  name: ecomm-secrets-w10-aks
-                  key: RABBITMQ_PASS
+      imagePullSecrets:
+        - name: acr-auth
 ---
 apiVersion: v1
 kind: Service
@@ -83,8 +59,6 @@ metadata:
   name: product-service-w10-aks
   labels:
     app: product-service
-  annotations:
-    service.beta.kubernetes.io/azure-load-balancer-resource-group: deakinuni
 spec:
   selector:
     app: product-service
@@ -92,5 +66,6 @@ spec:
     - protocol: TCP
       port: 8000
       targetPort: 8000
-  type: LoadBalancer
-  loadBalancerIP: 4.197.210.224
+  type: ClusterIP
+---
+

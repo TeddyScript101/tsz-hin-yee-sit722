@@ -13,14 +13,14 @@ jobs:
       RESOURCE_GROUP: teddysit722Week10
       AKS_NAME: aksteddy722Week10
       ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
-      IMAGE_TAG: "latest" # Use latest tag instead of commit SHA
+      IMAGE_TAG: ${{ github.sha }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Azure Login
-        uses: azure/login@v1
+        uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
@@ -29,29 +29,93 @@ jobs:
           az aks get-credentials --resource-group $RESOURCE_GROUP --name $AKS_NAME
           kubectl cluster-info
 
-      - name: Create production Namespace
+      - name: Create Production Namespace
         run: |
           kubectl create namespace production || echo "Namespace exists"
 
-      - name: Deploy Backend Services
+      - name: Create ACR Pull Secret
         run: |
-          for service in customer_service order_service product_service; do
-            K8S_NAME=$(echo $service | sed 's/_/-/g')
-            echo "📦 Deploying $service as $K8S_NAME"
-            
-            kubectl create deployment $K8S_NAME \
-              --image=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG \
-              -n production --dry-run=client -o yaml | kubectl apply -f -
-            kubectl expose deployment $K8S_NAME \
-              --port=80 --target-port=80 \
-              --name=${K8S_NAME}-service \
-              -n production --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create secret docker-registry acr-auth \
+            --docker-server=${{ secrets.ACR_LOGIN_SERVER }} \
+            --docker-username=${{ secrets.ACR_USERNAME }} \
+            --docker-password=${{ secrets.ACR_PASSWORD }} \
+            --namespace=production
 
-            kubectl label deployment $K8S_NAME app=$K8S_NAME -n production --overwrite
-            kubectl set image deployment/$K8S_NAME *=$ACR_LOGIN_SERVER/$service:$IMAGE_TAG -n production
+      # -------------------------------
+      # Update image tags in YAML files
+      # -------------------------------
+      - name: Update Image Tags
+        run: |
+          # First apply the YAML files
+          kubectl apply -f k8s/product-service.yaml -n production
+          kubectl apply -f k8s/order-service.yaml -n production
+          kubectl apply -f k8s/customer-service.yaml -n production
 
-            echo "✅ $service deployed and labeled"
-          done
+          # Then update images using kubectl set image
+          kubectl set image deployment/product-service-w10-aks \
+            product-service-container=${{ secrets.ACR_LOGIN_SERVER }}/product_service:${{ env.IMAGE_TAG }} \
+            -n production
+
+          kubectl set image deployment/order-service-w10-aks \
+            order-service-container=${{ secrets.ACR_LOGIN_SERVER }}/order_service:${{ env.IMAGE_TAG }} \
+            -n production
+
+          kubectl set image deployment/customer-service-w10-aks \
+            customer-service-container=${{ secrets.ACR_LOGIN_SERVER }}/customer_service:${{ env.IMAGE_TAG }} \
+            -n production
+
+          # Verify the updates
+          echo "🔍 Verifying deployment images:"
+          kubectl get deployments -n production -o=jsonpath='{range .items[*]}{"\n"}{.metadata.name}{":\n"}{range .spec.template.spec.containers[*]}{.name}{" -> "}{.image}{"\n"}{end}{end}'
+
+      # Apply configs first
+      - name: Apply ConfigMaps
+        run: kubectl apply -f k8s/configmaps.yaml -n production
+
+      - name: Apply Secrets
+        run: kubectl apply -f k8s/secrets.yaml -n production
+
+      # Deploy databases
+      - name: Deploy Product DB
+        run: |
+          kubectl apply -f k8s/product-db.yaml -n production
+          kubectl rollout status deployment/product-db-deployment-w10-aks -n production --timeout=300s
+
+      - name: Deploy Order DB
+        run: |
+          kubectl apply -f k8s/order-db.yaml -n production
+          kubectl rollout status deployment/order-db-deployment-w10-aks -n production --timeout=300s
+
+      - name: Deploy Customer DB
+        run: |
+          kubectl apply -f k8s/customer-db.yaml -n production
+          kubectl rollout status deployment/customer-db-deployment-w10-aks -n production --timeout=300s
+
+      # Deploy services
+      - name: Deploy Product Service
+        run: |
+          kubectl apply -f k8s/product-service.yaml -n production
+          kubectl rollout status deployment/product-service-w10-aks -n production --timeout=300s
+
+      - name: Deploy Order Service
+        run: |
+          kubectl apply -f k8s/order-service.yaml -n production
+          kubectl rollout status deployment/order-service-w10-aks -n production --timeout=300s
+
+      - name: Deploy Customer Service
+        run: |
+          kubectl apply -f k8s/customer-service.yaml -n production
+          kubectl rollout status deployment/customer-service-w10-aks -n production --timeout=300s
+
+      # Frontend deployment
+      - name: Login to ACR
+        run: |
+          echo ${{ secrets.ACR_PASSWORD }} | docker login -u ${{ secrets.ACR_USERNAME }} --password-stdin ${{ secrets.ACR_LOGIN_SERVER }}
+
+      - name: Build and push frontend image
+        run: |
+          docker build -t ${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }} frontend
+          docker push ${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }}
 
       - name: Get Backend IPs
         run: |
@@ -78,39 +142,33 @@ jobs:
 
       - name: Deploy Frontend
         run: |
-          echo "📦 Deploying frontend"
-          kubectl create deployment frontend --image=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG -n production --dry-run=client -o yaml | kubectl apply -f -
-          kubectl expose deployment frontend --port=80 --target-port=80 --name=frontend-service -n production --dry-run=client -o yaml | kubectl apply -f -
-          kubectl set image deployment/frontend *=$ACR_LOGIN_SERVER/frontend:$IMAGE_TAG -n production
-          kubectl label deployment frontend app=frontend -n production --overwrite
-          echo "✅ Frontend deployed and labeled"
+          # Apply frontend deployment
+          echo "🚀 Deploying frontend..."
+          kubectl apply -f k8s/frontend.yaml -n production
 
-      - name: Wait for Deployments
-        run: |
-          DEPLOYMENTS=$(kubectl get deployments -n production -o jsonpath='{.items[*].metadata.name}')
-          for dep in $DEPLOYMENTS; do
-            kubectl rollout status deployment/$dep -n production --timeout=300s
-            echo "✅ $dep ready"
-          done
+          # Quick status check
+          echo "⏳ Initial pod status (5s)..."
+          sleep 5
+          kubectl get pods -n production -l app=frontend
 
-      - name: Run production Tests
-        run: |
-          echo "🧪 Running tests..."
-          kubectl port-forward service/frontend-service 8080:80 -n production &
-          PF_PID=$!
-          sleep 10
-          curl -f -s http://localhost:8080 && echo "✅ Frontend responding" || echo "⚠️ Frontend not responding"
-          kill $PF_PID 2>/dev/null || true
+          # Check events for potential issues
+          echo "📋 Checking events..."
+          kubectl get events -n production --sort-by='.lastTimestamp' | grep frontend
 
-          for svc in customer-service order-service product-service; do
-            POD=$(kubectl get pods -n production -l app=$svc -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-            if [ -n "$POD" ]; then
-              kubectl wait --for=condition=ready pod/$POD -n production --timeout=120s
-              echo "✅ $svc pod ready"
-            else
-              echo "⚠️ $svc pod not found"
-            fi
-          done
+          # Debug pod status with shorter timeout
+          echo "🔍 Watching pod status..."
+          timeout 60s kubectl get pods -n production -l app=frontend -w || true
+
+          # Get detailed pod description if any exist
+          POD_NAME=$(kubectl get pods -n production -l app=frontend -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+          if [ ! -z "$POD_NAME" ]; then
+            echo "📝 Pod description:"
+            kubectl describe pod $POD_NAME -n production
+          fi
+
+          # Final rollout check
+          echo "⏳ Waiting for rollout completion..."
+          kubectl rollout status deployment/frontend-w10-aks -n production --timeout=60s
 
       - name: Display Production Status
         run: |
@@ -118,4 +176,13 @@ jobs:
           kubectl get services -n production
           kubectl get deployments -n production
           kubectl get pods -n production
-          echo "✅ Production deployment completed!"
+
+          for svc in frontend-w10-aks product-service-w10-aks order-service-w10-aks customer-service-w10-aks; do
+            TYPE=$(kubectl get svc $svc -n production -o jsonpath='{.spec.type}' 2>/dev/null || echo "NotFound")
+            if [ "$TYPE" = "LoadBalancer" ]; then
+              EXTERNAL_IP=$(kubectl get svc $svc -n production -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+              echo "✅ $svc LoadBalancer IP: $EXTERNAL_IP"
+            else
+              echo "ℹ️ $svc is $TYPE"
+            fi
+          done
