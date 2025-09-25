@@ -61,7 +61,6 @@ metadata:
     app: product-service
   annotations:
     service.beta.kubernetes.io/azure-load-balancer-resource-group: teddysit722Week10
-    kubernetes.azure.com/managed: "true"
 spec:
   selector:
     app: product-service
@@ -69,4 +68,5 @@ spec:
     - protocol: TCP
       port: 8000
       targetPort: 8000
+      name: http
   type: LoadBalancer

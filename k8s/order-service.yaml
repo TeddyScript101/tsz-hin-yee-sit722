@@ -74,12 +74,13 @@ metadata:
     app: order-service
   annotations:
     service.beta.kubernetes.io/azure-load-balancer-resource-group: teddysit722Week10
-
+    kubernetes.azure.com/managed: "true"
 spec:
   selector:
     app: order-service
   ports:
     - protocol: TCP
       port: 8001
-      targetPort: 8000
+      targetPort: 8001 # Changed to match containerPort
+      name: http
   type: LoadBalancer

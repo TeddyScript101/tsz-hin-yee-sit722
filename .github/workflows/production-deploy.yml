@@ -42,34 +42,7 @@ jobs:
             --namespace=production \
             --dry-run=client -o yaml | kubectl apply -f -
 
-      # -------------------------------
-      # Update image tags in YAML files
-      # -------------------------------
-      - name: Update Image Tags
-        run: |
-          # First apply the YAML files
-          kubectl apply -f k8s/product-service.yaml -n production
-          kubectl apply -f k8s/order-service.yaml -n production
-          kubectl apply -f k8s/customer-service.yaml -n production
-
-          # Then update images using kubectl set image
-          kubectl set image deployment/product-service-w10-aks \
-            product-service-container=${{ secrets.ACR_LOGIN_SERVER }}/product_service:${{ env.IMAGE_TAG }} \
-            -n production
-
-          kubectl set image deployment/order-service-w10-aks \
-            order-service-container=${{ secrets.ACR_LOGIN_SERVER }}/order_service:${{ env.IMAGE_TAG }} \
-            -n production
-
-          kubectl set image deployment/customer-service-w10-aks \
-            customer-service-container=${{ secrets.ACR_LOGIN_SERVER }}/customer_service:${{ env.IMAGE_TAG }} \
-            -n production
-
-          # Verify the updates
-          echo "🔍 Verifying deployment images:"
-          kubectl get deployments -n production -o=jsonpath='{range .items[*]}{"\n"}{.metadata.name}{":\n"}{range .spec.template.spec.containers[*]}{.name}{" -> "}{.image}{"\n"}{end}{end}'
-
-      # Apply configs first
+      # Apply ConfigMaps and Secrets
       - name: Apply ConfigMaps
         run: kubectl apply -f k8s/configmaps.yaml -n production
 
@@ -113,29 +86,48 @@ jobs:
         run: |
           echo ${{ secrets.ACR_PASSWORD }} | docker login -u ${{ secrets.ACR_USERNAME }} --password-stdin ${{ secrets.ACR_LOGIN_SERVER }}
 
-      - name: Build and push frontend image
+      - name: Build and Push Frontend Image
         run: |
           docker build -t ${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }} frontend
           docker push ${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }}
 
-      - name: Get Backend IPs
+      - name: Wait for Backend External IPs
         run: |
-          PRODUCT_API_IP=$(kubectl get svc product-service-w10-aks -n production -o jsonpath='{.spec.clusterIP}')
-          ORDER_API_IP=$(kubectl get svc order-service-w10-aks -n production -o jsonpath='{.spec.clusterIP}')
-          CUSTOMER_API_IP=$(kubectl get svc customer-service-w10-aks -n production -o jsonpath='{.spec.clusterIP}')
+          get_ip() {
+            local svc=$1
+            local retries=30
+            while [ $retries -gt 0 ]; do
+              IP=$(kubectl get svc $svc -n production -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
+              if [ ! -z "$IP" ]; then
+                echo "$IP"
+                return
+              fi
+              retries=$((retries - 1))
+              echo "⏳ Waiting for $svc external IP... ($retries attempts left)"
+              sleep 10
+            done
+            echo ""
+          }
+
+          PRODUCT_API_IP=$(get_ip product-service-w10-aks)
+          ORDER_API_IP=$(get_ip order-service-w10-aks)
+          CUSTOMER_API_IP=$(get_ip customer-service-w10-aks)
+
+          if [ -z "$PRODUCT_API_IP" ] || [ -z "$ORDER_API_IP" ] || [ -z "$CUSTOMER_API_IP" ]; then
+            echo "❌ One or more backend services do not have an external IP yet"
+            exit 1
+          fi
 
           echo "PRODUCT_API_IP=$PRODUCT_API_IP" >> $GITHUB_ENV
           echo "ORDER_API_IP=$ORDER_API_IP" >> $GITHUB_ENV
           echo "CUSTOMER_API_IP=$CUSTOMER_API_IP" >> $GITHUB_ENV
 
-          echo "✅ Captured backend IPs"
-
       - name: Inject Backend IPs into Frontend main.js
         run: |
           echo "Injecting backend IPs into frontend/main.js"
-          sed -i "s|_PRODUCT_API_URL_|http://$PRODUCT_API_IP:80|g" frontend/main.js
-          sed -i "s|_ORDER_API_URL_|http://$ORDER_API_IP:80|g" frontend/main.js
-          sed -i "s|_CUSTOMER_API_URL_|http://$CUSTOMER_API_IP:80|g" frontend/main.js
+          sed -i "s|_PRODUCT_API_URL_|http://$PRODUCT_API_IP:8000|g" frontend/main.js
+          sed -i "s|_ORDER_API_URL_|http://$ORDER_API_IP:8001|g" frontend/main.js
+          sed -i "s|_CUSTOMER_API_URL_|http://$CUSTOMER_API_IP:8002|g" frontend/main.js
 
           echo "--- Modified main.js (first 30 lines) ---"
           head -30 frontend/main.js
@@ -143,81 +135,8 @@ jobs:
 
       - name: Deploy Frontend
         run: |
-          # Apply frontend deployment
-          echo "🚀 Deploying frontend..."
           kubectl apply -f k8s/frontend.yaml -n production
-
-          # Quick status check
-          echo "⏳ Initial pod status (5s)..."
-          sleep 5
-          kubectl get pods -n production -l app=frontend
-
-          # Check events for potential issues
-          echo "📋 Checking events..."
-          kubectl get events -n production --sort-by='.lastTimestamp' | grep frontend
-
-          # Debug pod status with shorter timeout
-          echo "🔍 Watching pod status..."
-          timeout 60s kubectl get pods -n production -l app=frontend -w || true
-
-          # Get detailed pod description if any exist
-          POD_NAME=$(kubectl get pods -n production -l app=frontend -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-          if [ ! -z "$POD_NAME" ]; then
-            echo "📝 Pod description:"
-            kubectl describe pod $POD_NAME -n production
-          fi
-
-          # Final rollout check
-          echo "⏳ Waiting for rollout completion..."
-          kubectl rollout status deployment/frontend-w10-aks -n production --timeout=60s
-
-      - name: Wait for External IPs
-        run: |
-          echo "⏳ Waiting for LoadBalancer external IPs..."
-
-          wait_for_ip() {
-            local service=$1
-            local retries=30
-            while [ $retries -gt 0 ]; do
-              IP=$(kubectl get svc $service -n production -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-              if [ ! -z "$IP" ]; then
-                echo "$service_IP=$IP" >> $GITHUB_ENV
-                echo "✅ $service got IP: $IP"
-                return 0
-              fi
-              retries=$((retries - 1))
-              echo "⏳ Waiting for $service IP... ($retries attempts left)"
-              sleep 10
-            done
-            echo "❌ Timeout waiting for $service IP"
-            return 1
-          }
-
-          # Wait for each service's external IP
-          wait_for_ip "product-service-w10-aks"
-          wait_for_ip "order-service-w10-aks"
-          wait_for_ip "customer-service-w10-aks"
-
-      - name: Update Frontend Config
-        run: |
-          # Get the external IPs
-          PRODUCT_API_IP=$(kubectl get svc product-service-w10-aks -n production -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-          ORDER_API_IP=$(kubectl get svc order-service-w10-aks -n production -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-          CUSTOMER_API_IP=$(kubectl get svc customer-service-w10-aks -n production -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-
-          # Update main.js with external IPs
-          sed -i "s|_PRODUCT_API_URL_|http://$PRODUCT_API_IP:8000|g" frontend/main.js
-          sed -i "s|_ORDER_API_URL_|http://$ORDER_API_IP:8001|g" frontend/main.js
-          sed -i "s|_CUSTOMER_API_URL_|http://$CUSTOMER_API_IP:8002|g" frontend/main.js
-
-          echo "Frontend will use:"
-          echo "Product API: http://$PRODUCT_API_IP:8000"
-          echo "Order API: http://$ORDER_API_IP:8001"
-          echo "Customer API: http://$CUSTOMER_API_IP:8002"
-
-          # Rebuild frontend with new config
-          docker build -t ${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }} frontend
-          docker push ${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ env.IMAGE_TAG }}
+          kubectl rollout status deployment/frontend-w10-aks -n production --timeout=300s
 
       - name: Display Production Status
         run: |
@@ -235,26 +154,3 @@ jobs:
               echo "ℹ️ $svc is $TYPE"
             fi
           done
-
-      - name: Verify Azure Network Permissions
-        run: |
-          echo "🔍 Checking Azure Network permissions..."
-
-          # Get current subscription ID
-          SUB_ID=$(az account show --query id -o tsv)
-          echo "Using subscription: $SUB_ID"
-
-          # Check Network Contributor role
-          echo "Checking Network Contributor role..."
-          az role assignment list \
-            --assignee ${{ secrets.AZURE_CLIENT_ID }} \
-            --scope /subscriptions/$SUB_ID/resourceGroups/teddysit722Week10 \
-            --query "[?roleDefinitionName=='Network Contributor']" -o table
-
-          # Verify resource group exists
-          echo "Verifying resource group..."
-          az group show --name teddysit722Week10 --query "name" -o tsv
-
-          # List existing public IPs
-          echo "Listing existing public IPs..."
-          az network public-ip list -g teddysit722Week10 -o table
