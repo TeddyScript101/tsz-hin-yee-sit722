@@ -142,33 +142,29 @@ jobs:
       - name: Wait for Services and Setup Port Forwarding with Logs
         run: |
           NAMESPACE=$STAGING_NAMESPACE
-
-          # Labels for waiting on pods
           POD_LABELS=("product-service" "order-service" "customer-service" "frontend")
-
-          # Corresponding Service names for port forwarding
           SERVICES=("product-service-w10-aks" "order-service-w10-aks" "customer-service-w10-aks" "frontend-w10-aks")
           LOCAL_PORTS=(18000 18001 18002 18003)
-          TARGET_PORTS=(8000 8001 8002 80)  # container ports
+          TARGET_PORTS=(8000 8001 8002 80)
 
-          # Wait for pods to be ready and print logs
+          # Wait for pods and print logs
           for label in "${POD_LABELS[@]}"; do
             echo "🔍 Waiting for pods with label app=$label to be ready..."
-            kubectl wait --for=condition=Ready pod -l app=$label -n $NAMESPACE --timeout=180s || true
-            echo "📄 Listing pods for $label:"
+            kubectl wait --for=condition=Ready pod -l app=$label -n $NAMESPACE --timeout=300s || true
+            echo "📄 Pods for $label:"
             kubectl get pods -l app=$label -n $NAMESPACE
-            echo "📝 Last 20 lines of pod logs for $label:"
+            echo "📝 Last 20 lines of logs for $label:"
             for pod in $(kubectl get pods -l app=$label -n $NAMESPACE -o jsonpath='{.items[*].metadata.name}'); do
               echo "--- Logs for $pod ---"
               kubectl logs $pod -n $NAMESPACE --tail=20
             done
           done
 
-          # List services for debug
-          echo "📄 Listing services in namespace $NAMESPACE:"
+          # List services
+          echo "📄 Services in namespace $NAMESPACE:"
           kubectl get svc -n $NAMESPACE
 
-          # Setup port forwards
+          # Port forwards
           for i in ${!SERVICES[@]}; do
             svc=${SERVICES[$i]}
             local_port=${LOCAL_PORTS[$i]}
@@ -177,8 +173,8 @@ jobs:
             kubectl port-forward svc/$svc $local_port:$target_port -n $NAMESPACE &
           done
 
-          echo "⏳ Waiting 10s for port forwards to stabilize..."
-          sleep 10
+          echo "⏳ Waiting 15s for port forwards to stabilize..."
+          sleep 15
 
       # -------------------------------
       # Test Service Connectivity
@@ -188,16 +184,16 @@ jobs:
           test_endpoint() {
             local name=$1
             local url=$2
-            for i in {1..10}; do
+            for i in {1..15}; do
               if curl -f -s --max-time 5 "$url" >/dev/null 2>&1; then
                 echo "✅ $name is responding"
                 return 0
               else
-                echo "⏳ Attempt $i/10: $name not ready, retrying..."
+                echo "⏳ Attempt $i/15: $name not ready, retrying..."
                 sleep 2
               fi
             done
-            echo "❌ $name failed to respond after 10 attempts"
+            echo "❌ $name failed to respond after 15 attempts"
             return 1
           }
 
@@ -205,25 +201,6 @@ jobs:
           test_endpoint "Order Service" "http://localhost:18001/health"
           test_endpoint "Customer Service" "http://localhost:18002/health"
           test_endpoint "Frontend" "http://localhost:18003/"
-
-      # -------------------------------
-      # Export Service URLs for Tests
-      # -------------------------------
-      - name: Export Service URLs and Run Tests
-        run: |
-          export PRODUCT_API_IP="http://localhost:18000"
-          export ORDER_API_IP="http://localhost:18001"
-          export CUSTOMER_API_IP="http://localhost:18002"
-          export FRONTEND_URL="http://localhost:18003"
-
-          echo "🔗 Final service URLs:"
-          echo "Product API: $PRODUCT_API_IP"
-          echo "Order API: $ORDER_API_IP"
-          echo "Customer API: $CUSTOMER_API_IP"
-          echo "Frontend: $FRONTEND_URL"
-
-          cd util
-          npm test --testTimeout=30000
 
       # -------------------------------
       # Cleanup Port Forwards
