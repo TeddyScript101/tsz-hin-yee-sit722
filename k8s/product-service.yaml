@@ -40,6 +40,23 @@ spec:
                 secretKeyRef:
                   name: ecomm-secrets-w10-aks
                   key: POSTGRES_PASSWORD
+            # ADD THESE RABBITMQ ENVIRONMENT VARIABLES
+            - name: RABBITMQ_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: ecomm-config-w10-aks
+                  key: RABBITMQ_HOST
+            - name: RABBITMQ_USER
+              valueFrom:
+                secretKeyRef:
+                  name: ecomm-secrets-w10-aks
+                  key: RABBITMQ_USER
+            - name: RABBITMQ_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: ecomm-secrets-w10-aks
+                  key: RABBITMQ_PASS
+            # EXISTING AZURE STORAGE VARIABLES
             - name: AZURE_STORAGE_ACCOUNT_NAME
               valueFrom:
                 secretKeyRef:
@@ -50,6 +67,16 @@ spec:
                 secretKeyRef:
                   name: ecomm-secrets-w10-aks
                   key: AZURE_STORAGE_ACCOUNT_KEY
+            - name: AZURE_STORAGE_CONTAINER_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: ecomm-config-w10-aks
+                  key: AZURE_STORAGE_CONTAINER_NAME
+            - name: AZURE_SAS_TOKEN_EXPIRY_HOURS
+              valueFrom:
+                configMapKeyRef:
+                  name: ecomm-config-w10-aks
+                  key: AZURE_SAS_TOKEN_EXPIRY_HOURS
       imagePullSecrets:
         - name: acr-auth
 ---
