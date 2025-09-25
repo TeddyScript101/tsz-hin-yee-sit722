@@ -116,7 +116,6 @@ jobs:
       # -------------------------------
       - name: Deploy Product Service
         run: |
-          # Apply the configuration
           kubectl apply -f k8s/product-service.yaml -n $STAGING_NAMESPACE
 
           # Debug pod status
@@ -127,34 +126,18 @@ jobs:
           echo "📋 Pod description:"
           kubectl describe pods -n $STAGING_NAMESPACE -l app=product-service
 
-          # Check pod logs if any pods exist
-          POD_NAME=$(kubectl get pods -n $STAGING_NAMESPACE -l app=product-service -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-          if [ ! -z "$POD_NAME" ]; then
-            echo "📝 Pod logs:"
-            kubectl logs $POD_NAME -n $STAGING_NAMESPACE
-          fi
-
-          # Now wait for rollout
+          # Wait for rollout
           kubectl rollout status deployment/product-service-w10-aks -n $STAGING_NAMESPACE --timeout=300s
-          kubectl wait --for=condition=Ready pod -l app=product-service -n $STAGING_NAMESPACE --timeout=180s
 
       - name: Deploy Order Service
         run: |
           kubectl apply -f k8s/order-service.yaml -n $STAGING_NAMESPACE
           kubectl rollout status deployment/order-service-w10-aks -n $STAGING_NAMESPACE --timeout=300s
-          kubectl wait --for=condition=Ready pod -l app=order-service -n $STAGING_NAMESPACE --timeout=180s
 
       - name: Deploy Customer Service
         run: |
           kubectl apply -f k8s/customer-service.yaml -n $STAGING_NAMESPACE
           kubectl rollout status deployment/customer-service-w10-aks -n $STAGING_NAMESPACE --timeout=300s
-
-          # Wait only for running pods
-          kubectl wait --for=condition=Ready pod \
-            -l app=customer-service \
-            --field-selector status.phase=Running \
-            -n $STAGING_NAMESPACE \
-            --timeout=180s
 
       # -------------------------------
       # Inject Service URLs into Frontend
