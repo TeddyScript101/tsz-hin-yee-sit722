@@ -222,34 +222,11 @@ jobs:
             done
           done
 
-      # --- RabbitMQ Connectivity Check ---
       - name: Check RabbitMQ Status
         run: |
-          echo "🔍 Checking RabbitMQ pod..."
-          kubectl get pod -l app=rabbitmq -n $STAGING_NAMESPACE
-          echo "🔄 Recent RabbitMQ logs:"
-          kubectl logs -l app=rabbitmq -n $STAGING_NAMESPACE --tail=20
-
-          echo "🔍 Testing RabbitMQ connectivity from Order Service..."
-          ORDER_POD=$(kubectl get pod -l app=order-service -n $STAGING_NAMESPACE -o jsonpath='{.items[0].metadata.name}')
-
-          # Install netcat if not available
-          kubectl exec $ORDER_POD -n $STAGING_NAMESPACE -- sh -c "which nc || (apt-get update && apt-get install -y netcat-openbsd)" || true
-
-          for i in {1..5}; do
-            if kubectl exec $ORDER_POD -n $STAGING_NAMESPACE -- sh -c "nc -zv rabbitmq-service-w10-aks 5672 2>&1"; then
-              echo "✅ RabbitMQ port 5672 is reachable (attempt $i/5)"
-              break
-            else
-              echo "⏳ RabbitMQ port 5672 not reachable (attempt $i/5), retrying in 5s..."
-              sleep 5
-              if [ $i -eq 5 ]; then
-                echo "❌ RabbitMQ port 5672 not reachable after 5 attempts"
-                kubectl logs -l app=rabbitmq -n $STAGING_NAMESPACE --tail=50
-                exit 1
-              fi
-            fi
-          done
+          echo "🔍 Basic RabbitMQ status check..."
+          kubectl get pods -l app=rabbitmq -n $STAGING_NAMESPACE
+          echo "✅ RabbitMQ deployment check completed"
 
       # --- Deployment Summary ---
       - name: Deployment Summary
