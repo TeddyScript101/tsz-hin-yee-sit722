@@ -18,7 +18,8 @@ spec:
     spec:
       containers:
         - name: product-service-container
-          image: teddyacr722week10.azurecr.io/product_service:latest
+          # FIXED IMAGE NAME: use hyphen, not underscore
+          image: teddyacr722week10.azurecr.io/product-service:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
@@ -40,7 +41,7 @@ spec:
                 secretKeyRef:
                   name: ecomm-secrets-w10-aks
                   key: POSTGRES_PASSWORD
-            # ADD THESE RABBITMQ ENVIRONMENT VARIABLES
+            # RABBITMQ ENV
             - name: RABBITMQ_HOST
               valueFrom:
                 configMapKeyRef:
@@ -56,7 +57,7 @@ spec:
                 secretKeyRef:
                   name: ecomm-secrets-w10-aks
                   key: RABBITMQ_PASS
-            # EXISTING AZURE STORAGE VARIABLES
+            # AZURE STORAGE VARIABLES
             - name: AZURE_STORAGE_ACCOUNT_NAME
               valueFrom:
                 secretKeyRef:
@@ -78,7 +79,8 @@ spec:
                   name: ecomm-config-w10-aks
                   key: AZURE_SAS_TOKEN_EXPIRY_HOURS
       imagePullSecrets:
-        - name: acr-auth
+        - name: acr-auth # make sure this secret exists in the namespace
+
 ---
 apiVersion: v1
 kind: Service
