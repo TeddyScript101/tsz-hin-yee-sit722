@@ -193,9 +193,37 @@ jobs:
 
       - name: Deploy Frontend
         run: |
+          # Apply frontend deployment with initial debug info
+          echo "🚀 Deploying frontend..."
           kubectl apply -f k8s/frontend.yaml -n $STAGING_NAMESPACE
-          kubectl rollout status deployment/frontend-w10-aks -n $STAGING_NAMESPACE --timeout=300s
-          kubectl wait --for=condition=Ready pod -l app=frontend -n $STAGING_NAMESPACE --timeout=180s
+
+          # Quick status check
+          echo "⏳ Initial pod status (5s)..."
+          sleep 5
+          kubectl get pods -n $STAGING_NAMESPACE -l app=frontend
+
+          # Check events for potential issues
+          echo "📋 Checking events..."
+          kubectl get events -n $STAGING_NAMESPACE --sort-by='.lastTimestamp' | grep frontend
+
+          # Debug pod status with shorter timeout
+          echo "🔍 Watching pod status..."
+          timeout 60s kubectl get pods -n $STAGING_NAMESPACE -l app=frontend -w || true
+
+          # Get detailed pod description if any exist
+          POD_NAME=$(kubectl get pods -n $STAGING_NAMESPACE -l app=frontend -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+          if [ ! -z "$POD_NAME" ]; then
+            echo "📝 Pod description:"
+            kubectl describe pod $POD_NAME -n $STAGING_NAMESPACE
+          fi
+
+          # Final rollout check
+          echo "⏳ Waiting for rollout completion..."
+          kubectl rollout status deployment/frontend-w10-aks -n $STAGING_NAMESPACE --timeout=60s
+
+          # Verify final state
+          echo "✅ Final deployment state:"
+          kubectl get deployment,pods -n $STAGING_NAMESPACE -l app=frontend
 
       - name: Log Service Status
         run: |
