@@ -110,27 +110,16 @@ jobs:
           kubectl rollout status deployment/customer-service-w10-aks -n $STAGING_NAMESPACE --timeout=300s
 
       # -------------------------------
-      # Get Backend Cluster IPs
+      # Inject Backend IPs for Staging Health Check
       # -------------------------------
-      - name: Get Backend IPs
-        run: |
-          PRODUCT_API_IP=$(kubectl get svc product-service-w10-aks -n $STAGING_NAMESPACE -o jsonpath='{.spec.clusterIP}')
-          ORDER_API_IP=$(kubectl get svc order-service-w10-aks -n $STAGING_NAMESPACE -o jsonpath='{.spec.clusterIP}')
-          CUSTOMER_API_IP=$(kubectl get svc customer-service-w10-aks -n $STAGING_NAMESPACE -o jsonpath='{.spec.clusterIP}')
-
-          echo "PRODUCT_API_IP=$PRODUCT_API_IP" >> $GITHUB_ENV
-          echo "ORDER_API_IP=$ORDER_API_IP" >> $GITHUB_ENV
-          echo "CUSTOMER_API_IP=$CUSTOMER_API_IP" >> $GITHUB_ENV
-
-      # -------------------------------
-      # Inject Backend IPs into Frontend main.js
-      # -------------------------------
-      - name: Inject Backend IPs
+      - name: Inject Backend IPs for Local Testing
         run: |
           FRONTEND_FILE=frontend/main.js
-          sed -i "s|_PRODUCT_API_URL_|http://$PRODUCT_API_IP:80|g" "$FRONTEND_FILE"
-          sed -i "s|_ORDER_API_URL_|http://$ORDER_API_IP:80|g" "$FRONTEND_FILE"
-          sed -i "s|_CUSTOMER_API_URL_|http://$CUSTOMER_API_IP:80|g" "$FRONTEND_FILE"
+
+          # Use localhost ports for testing with port-forward
+          sed -i "s|_PRODUCT_API_URL_|http://localhost:8000|g" "$FRONTEND_FILE"
+          sed -i "s|_ORDER_API_URL_|http://localhost:8001|g" "$FRONTEND_FILE"
+          sed -i "s|_CUSTOMER_API_URL_|http://localhost:8002|g" "$FRONTEND_FILE"
 
       # -------------------------------
       # Build and Push Frontend Image
@@ -162,21 +151,24 @@ jobs:
         run: |
           echo "🧪 Running health checks for backend services..."
 
-          PRODUCT_API_IP=$(kubectl get svc product-service-w10-aks -n $STAGING_NAMESPACE -o jsonpath='{.spec.clusterIP}')
-          ORDER_API_IP=$(kubectl get svc order-service-w10-aks -n $STAGING_NAMESPACE -o jsonpath='{.spec.clusterIP}')
-          CUSTOMER_API_IP=$(kubectl get svc customer-service-w10-aks -n $STAGING_NAMESPACE -o jsonpath='{.spec.clusterIP}')
+          # Port-forward backend services and frontend
+          kubectl port-forward svc/product-service-w10-aks -n $STAGING_NAMESPACE 8000:8000 &
+          PF_PRODUCT=$!
+          kubectl port-forward svc/order-service-w10-aks -n $STAGING_NAMESPACE 8001:8001 &
+          PF_ORDER=$!
+          kubectl port-forward svc/customer-service-w10-aks -n $STAGING_NAMESPACE 8002:8002 &
+          PF_CUSTOMER=$!
+          kubectl port-forward svc/frontend-w10-aks -n $STAGING_NAMESPACE 8080:80 &
+          PF_FRONTEND=$!
+
+          sleep 5  # Give port-forwards time to start
 
           SERVICES=(
-            "product-service-w10-aks:$PRODUCT_API_IP:8000"
-            "order-service-w10-aks:$ORDER_API_IP:8001"
-            "customer-service-w10-aks:$CUSTOMER_API_IP:8002"
-            "frontend-w10-aks:localhost:8080"
+            "product-service:localhost:8000"
+            "order-service:localhost:8001"
+            "customer-service:localhost:8002"
+            "frontend:localhost:8080"
           )
-
-          # Port-forward frontend
-          kubectl port-forward service/frontend-w10-aks -n $STAGING_NAMESPACE 8080:80 &
-          PF_PID=$!
-          sleep 5
 
           for svc in "${SERVICES[@]}"; do
             NAME="${svc%%:*}"
@@ -193,7 +185,8 @@ jobs:
             fi
           done
 
-          kill $PF_PID 2>/dev/null || true
+          # Kill all port-forward processes
+          kill $PF_PRODUCT $PF_ORDER $PF_CUSTOMER $PF_FRONTEND 2>/dev/null || true
 
       # -------------------------------
       # Display Staging Status
